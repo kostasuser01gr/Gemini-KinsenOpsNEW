@@ -1,14 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, MessageSquare, Settings, LogOut, Send, Car, Download, ShieldAlert, FileText, Server, Search, Copy, Check, Command, Archive, Bookmark, Activity, Paperclip, ChevronRight, Hash, Pin } from 'lucide-react';
+import { Plus, MessageSquare, Settings, LogOut, Send, Car, ShieldAlert, FileText, Server, Search, Copy, Check, Command, Archive, Bookmark, Activity, Paperclip, ChevronRight, Hash, Pin, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import { Turnstile } from '@marsidev/react-turnstile';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8787';
+const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '1x00000000000000000000AA'; // Dummy key for dev
 
 function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [_role, setRole] = useState<string | null>(localStorage.getItem('role'));
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const [isLogin, setIsLogin] = useState(true);
 
   const [threads, setThreads] = useState<any[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -51,18 +55,29 @@ function App() {
     return () => window.removeEventListener('keydown', handleKey);
   }, []);
 
+  useEffect(() => { if (showCmdK) setTimeout(() => cmdKInputRef.current?.focus(), 50); }, [showCmdK]);
+
   const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
     const headers = { ...options.headers, Authorization: `Bearer ${token}`, 'x-correlation-id': 'req_' + Date.now() } as any;
     return fetch(url, { ...options, headers });
   };
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch(`${API_BASE}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+    const endpoint = isLogin ? '/api/auth/login' : '/api/auth/signup';
+    const res = await fetch(`${API_BASE}${endpoint}`, { 
+      method: 'POST', 
+      headers: { 'Content-Type': 'application/json' }, 
+      body: JSON.stringify({ email, password, turnstile_token: turnstileToken }) 
+    });
+    
     if (res.ok) {
       const data = await res.json(); setToken(data.token); setRole(data.role);
       localStorage.setItem('token', data.token); localStorage.setItem('role', data.role);
-    } else alert('Login failed');
+    } else {
+      const err = await res.text();
+      alert(`Auth failed: ${err}`);
+    }
   };
 
   const fetchThreads = async () => {
@@ -94,14 +109,17 @@ function App() {
 
     try {
       const res = await fetchWithAuth(`${API_BASE}/api/chat/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ thread_id: activeThreadId, content: msg }) });
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        if (res.status === 429) throw new Error('Rate limit exceeded. Slow down.');
+        throw new Error('API error');
+      }
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       setMessages(prev => [...prev, { id: 'temp_a', role: 'assistant', content: '', toolData: null }]);
 
       while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
+        const { value, done: isDone } = await reader.read();
+        if (isDone) break;
         const chunk = decoder.decode(value);
         const lines = chunk.split('\n');
         for (const line of lines) {
@@ -117,8 +135,8 @@ function App() {
           }
         }
       }
-    } catch(e) {
-      setMessages(prev => [...prev, { id: 'err', role: 'assistant', content: 'Fallback: Error contacting ops engine.' }]);
+    } catch(e: any) {
+      setMessages(prev => [...prev, { id: 'err', role: 'assistant', content: `Fallback: ${e.message || 'Error contacting ops engine.'}` }]);
     } finally { setLoading(false); fetchThreads(); }
   };
 
@@ -134,13 +152,26 @@ function App() {
   if (!token) return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white p-10 rounded-3xl shadow-2xl w-full max-w-md border border-gray-100">
-        <div className="flex justify-center mb-8"><div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-blue-200"><Car size={32}/></div></div>
+        <div className="flex justify-center mb-6"><div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-blue-200"><Car size={32}/></div></div>
         <h2 className="text-3xl font-black mb-2 text-center text-gray-900 tracking-tight">Ops Copilot</h2>
-        <p className="text-center text-gray-500 mb-8 text-sm font-medium">Internal Knowledge Base & SOP Support</p>
-        <form onSubmit={handleLogin} className="space-y-5">
+        <p className="text-center text-gray-500 mb-6 text-sm font-medium">Internal Knowledge Base & SOP Support</p>
+        
+        <div className="flex rounded-lg bg-gray-100 p-1 mb-6">
+          <button onClick={() => setIsLogin(true)} className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${isLogin ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>Sign In</button>
+          <button onClick={() => setIsLogin(false)} className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${!isLogin ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>Sign Up</button>
+        </div>
+
+        <form onSubmit={handleAuthSubmit} className="space-y-4">
           <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email address" className="w-full bg-gray-50 border-0 rounded-xl p-4 outline-none focus:ring-2 focus:ring-blue-500 transition-all font-medium" required/>
-          <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password" className="w-full bg-gray-50 border-0 rounded-xl p-4 outline-none focus:ring-2 focus:ring-blue-500 transition-all font-medium" required/>
-          <button type="submit" className="w-full bg-gray-900 text-white p-4 rounded-xl font-bold hover:bg-black transition-all shadow-xl shadow-gray-200">Access Portal</button>
+          <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password" minLength={8} className="w-full bg-gray-50 border-0 rounded-xl p-4 outline-none focus:ring-2 focus:ring-blue-500 transition-all font-medium" required/>
+          
+          <div className="flex justify-center my-4">
+            <Turnstile siteKey={TURNSTILE_SITE_KEY} onSuccess={setTurnstileToken} />
+          </div>
+
+          <button type="submit" disabled={!turnstileToken} className="w-full bg-gray-900 text-white p-4 rounded-xl font-bold hover:bg-black transition-all shadow-xl shadow-gray-200 disabled:opacity-50 disabled:cursor-not-allowed">
+            {isLogin ? 'Access Portal' : 'Create Account'}
+          </button>
         </form>
       </div>
     </div>
@@ -247,7 +278,7 @@ function App() {
               {messages.map((m, i) => {
                 let text = m.content; let tool = m.toolData;
                 if (m.role === 'assistant' && typeof m.content === 'string' && m.content.startsWith('{')) {
-                  try { const p = JSON.parse(m.content); text = p.text; tool = p.toolData; } catch(e){}
+                  try { const p = JSON.parse(m.content); text = p.text; tool = p.toolData || JSON.parse(p.metadata_json || '{}').tool; } catch(e){}
                 }
                 return (
                   <div key={m.id || i} className={`flex gap-6 animate-in fade-in duration-300 ${m.role === 'user' ? 'justify-end' : ''}`}>
@@ -263,9 +294,14 @@ function App() {
                       {tool && (
                         <div className="mt-6 border-t border-gray-200/50 pt-5 space-y-4">
                           {tool.type === 'ModelStatusCard' && (
-                            <div className="bg-white/80 p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-gray-400">
-                              <div className="flex items-center gap-3"><div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"/> <span className="text-gray-900">{tool.model}</span></div>
-                              <div className="bg-gray-100 px-2 py-1 rounded-md">{tool.provider}</div>
+                            <div className="bg-white/80 p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col gap-2 text-[10px] font-black uppercase tracking-widest text-gray-400">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3"><div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"/> <span className="text-gray-900">{tool.model}</span></div>
+                                <div className="bg-gray-100 px-2 py-1 rounded-md">{tool.provider}</div>
+                              </div>
+                              {tool.kbHits && tool.kbHits.length > 0 && (
+                                <div className="mt-2 text-blue-600 flex gap-2"><FileText size={12}/> Sources: {tool.kbHits.join(', ')}</div>
+                              )}
                             </div>
                           )}
                         </div>

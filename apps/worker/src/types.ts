@@ -16,34 +16,34 @@ export interface Env {
   ADMIN_ALLOWLIST_EMAILS?: string;
   HF_TOKEN?: string;
   TURNSTILE_SECRET_KEY?: string;
+  REQUIRE_INVITE_CODE?: string;
 }
 
 export type Action = 
-  | 'fleet:read' | 'fleet:write'
   | 'kb:read' | 'kb:write'
   | 'models:read' | 'models:write'
   | 'audit:read'
   | 'macros:read' | 'macros:write'
-  | 'threads:read' | 'threads:write';
+  | 'threads:read' | 'threads:write'
+  | 'users:read' | 'users:write';
 
 export const PERMISSIONS: Record<Role, Action[]> = {
   admin: [
-    'fleet:read', 'fleet:write',
     'kb:read', 'kb:write',
     'models:read', 'models:write',
     'audit:read',
     'macros:read', 'macros:write',
-    'threads:read', 'threads:write'
+    'threads:read', 'threads:write',
+    'users:read', 'users:write'
   ],
   manager: [
-    'fleet:read', 'fleet:write',
     'kb:read', 'kb:write',
     'models:read',
     'macros:read', 'macros:write',
-    'threads:read', 'threads:write'
+    'threads:read', 'threads:write',
+    'users:read'
   ],
   agent: [
-    'fleet:read',
     'kb:read',
     'macros:read',
     'threads:read', 'threads:write'
