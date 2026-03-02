@@ -5,7 +5,6 @@ export interface Model {
   display_name: string;
   provider_kind: 'DISABLED' | 'HF_ROUTED_FREE' | 'CF_WORKERS_AI_FREE';
   model_id: string;
-  base_url?: string;
   enabled: number;
   priority: number;
   license?: string;
@@ -15,13 +14,8 @@ export interface Model {
 }
 
 const BLOCKLIST = ['jailbreak', 'uncensored', 'refusal', 'bypass', 'nsfw', 'exploit', 'illegal', 'dolphin', 'roleplay'];
+const CF_FREE_NEURON_LIMIT = 10000;
 
-export function isBlocked(name: string): boolean {
-  const lower = name.toLowerCase();
-  return BLOCKLIST.some(term => lower.includes(badWord => lower.includes(term)));
-}
-
-// Actually my previous implementation of isJailbreak was a bit bugged in syntax, fixing it here
 export function isModelBlocked(modelId: string, displayName: string): boolean {
   const text = (modelId + ' ' + displayName).toLowerCase();
   return BLOCKLIST.some(term => text.includes(term));
@@ -29,53 +23,25 @@ export function isModelBlocked(modelId: string, displayName: string): boolean {
 
 export async function verifyHFLicense(modelId: string): Promise<string> {
   const res = await fetch(`https://huggingface.co/api/models/${modelId}`);
-  if (!res.ok) throw new Error('HF model not found or API error');
+  if (!res.ok) throw new Error('HF model not found');
   const data = await res.json() as any;
   const license = data.cardData?.license || data.tags?.find((t: string) => t.startsWith('license:'))?.split(':')[1];
-  if (!license) throw new Error('No license information found for this model');
+  if (!license) throw new Error('No license info');
   return license.toLowerCase();
 }
 
-export const ALLOWED_LICENSES = ['apache-2.0', 'mit', 'bsd', 'openrail'];
+async function checkCFUsage(env: Env): Promise<boolean> {
+  const today = new Date().toISOString().split('T')[0];
+  const usage = await env.DB.prepare('SELECT neurons_used FROM ai_usage_log WHERE day = ?').bind(today).first<{neurons_used: number}>();
+  return (usage?.neurons_used || 0) < CF_FREE_NEURON_LIMIT;
+}
 
-export async function callModel(env: Env, model: Model, messages: any[]): Promise<string> {
-  if (model.provider_kind === 'HF_ROUTED_FREE') {
-    const hfToken = env.HF_TOKEN;
-    const headers: any = { 'Content-Type': 'application/json' };
-    if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
-
-    const res = await fetch(`https://api-inference.huggingface.co/models/${model.model_id}/v1/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: model.model_id,
-        messages,
-        max_tokens: 1000,
-        stream: false
-      }),
-      signal: AbortSignal.timeout(10000)
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`HF Error (${res.status}): ${err}`);
-    }
-    const data = await res.json() as any;
-    return data.choices[0].message.content;
-  }
-
-  if (model.provider_kind === 'CF_WORKERS_AI_FREE') {
-    if (!env.AI) throw new Error('Workers AI not configured');
-    // Simplified: check if neurones left (approximate or just let it fail)
-    // Cloudflare Workers AI free tier is 10,000 neurons per day.
-    const res = await env.AI.run(model.model_id, {
-      messages,
-      max_tokens: 1000
-    });
-    return res.response || res.choices?.[0]?.message?.content;
-  }
-
-  throw new Error('Unsupported provider');
+async function logCFUsage(env: Env, neurons: number) {
+  const today = new Date().toISOString().split('T')[0];
+  await env.DB.prepare(`
+    INSERT INTO ai_usage_log (day, neurons_used) VALUES (?, ?)
+    ON CONFLICT(day) DO UPDATE SET neurons_used = neurons_used + ?
+  `).bind(today, neurons, neurons).run();
 }
 
 const rateLimits = new Map<string, { count: number; lastReset: number }>();
@@ -92,45 +58,57 @@ export function checkRateLimit(userId: string): boolean {
   return limit.count <= MAX_REQUESTS_PER_MINUTE;
 }
 
+export async function callModel(env: Env, model: Model, messages: any[]): Promise<string> {
+  if (model.provider_kind === 'HF_ROUTED_FREE') {
+    const res = await fetch(`https://api-inference.huggingface.co/models/${model.model_id}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        ...(env.HF_TOKEN ? { 'Authorization': `Bearer ${env.HF_TOKEN}` } : {})
+      },
+      body: JSON.stringify({ model: model.model_id, messages, max_tokens: 800 }),
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) throw new Error(`HF Error ${res.status}`);
+    const data = await res.json() as any;
+    return data.choices[0].message.content;
+  }
+
+  if (model.provider_kind === 'CF_WORKERS_AI_FREE') {
+    if (!env.AI) throw new Error('AI not bound');
+    if (!(await checkCFUsage(env))) throw new Error('CF Neuron limit reached');
+    
+    const res = await env.AI.run(model.model_id, { messages, max_tokens: 800 });
+    // Approximate neuron usage (simple count for free tier safety)
+    await logCFUsage(env, 100); 
+    return res.response || res.choices?.[0]?.message?.content;
+  }
+
+  throw new Error('Unsupported');
+}
+
 export async function routeChat(env: Env, messages: any[], preferredModelId?: string): Promise<{ content: string, model_id: string, provider: string, fallbacks: string[] }> {
   const now = new Date().toISOString();
+  const candidates = (await env.DB.prepare(`SELECT * FROM models WHERE enabled = 1 AND free_policy = 'FREE_ONLY' ORDER BY priority DESC`).all()).results as unknown as Model[];
   
-  // Get candidate models
-  let query = `SELECT * FROM models WHERE enabled = 1 AND free_policy = 'FREE_ONLY'`;
-  const candidatesRaw = await env.DB.prepare(query).all();
-  let candidates = candidatesRaw.results as unknown as Model[];
-
-  // Filter by cooloff
-  candidates = candidates.filter(m => !m.cooloff_until || m.cooloff_until < now);
-
-  // Sort by priority (high first)
-  candidates.sort((a, b) => b.priority - a.priority);
-
-  // If preferred model exists and is healthy, put it first
+  const healthy = candidates.filter(m => !m.cooloff_until || m.cooloff_until < now);
   if (preferredModelId) {
-    const idx = candidates.findIndex(m => m.id === preferredModelId);
-    if (idx > -1) {
-      const [pref] = candidates.splice(idx, 1);
-      candidates.unshift(pref);
-    }
+    const idx = healthy.findIndex(m => m.id === preferredModelId);
+    if (idx > -1) { const [p] = healthy.splice(idx, 1); healthy.unshift(p); }
   }
 
   const fallbacks: string[] = [];
-  for (const model of candidates) {
+  for (const model of healthy) {
     try {
       const content = await callModel(env, model, messages);
-      // Mark healthy
       await env.DB.prepare(`UPDATE models SET health_status = 'healthy', last_ok_at = ?, last_error = NULL WHERE id = ?`).bind(now, model.id).run();
       return { content, model_id: model.model_id, provider: model.provider_kind, fallbacks };
     } catch (e: any) {
       fallbacks.push(model.model_id);
-      // Mark unhealthy + cooloff 10m
       const cooloff = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-      await env.DB.prepare(`UPDATE models SET health_status = 'unhealthy', cooloff_until = ?, last_error = ? WHERE id = ?`)
-        .bind(cooloff, e.message, model.id).run();
+      await env.DB.prepare(`UPDATE models SET health_status = 'unhealthy', cooloff_until = ?, last_error = ? WHERE id = ?`).bind(cooloff, e.message, model.id).run();
     }
   }
 
-  // Final fallback: No-AI mode (handled by caller)
   return { content: '', model_id: 'NONE', provider: 'DISABLED', fallbacks };
 }

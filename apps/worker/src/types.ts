@@ -8,7 +8,7 @@ export interface User {
 
 export interface Env {
   DB: D1Database;
-  AI?: any; // Cloudflare Workers AI binding
+  AI?: any; 
   JWT_SECRET?: string;
   ENABLE_CF_ACCESS?: string;
   CF_ACCESS_JWKS_URL?: string;
@@ -25,3 +25,27 @@ export type Action =
   | 'audit:read'
   | 'macros:read' | 'macros:write'
   | 'threads:read' | 'threads:write';
+
+export const PERMISSIONS: Record<Role, Action[]> = {
+  admin: [
+    'fleet:read', 'fleet:write',
+    'kb:read', 'kb:write',
+    'models:read', 'models:write',
+    'audit:read',
+    'macros:read', 'macros:write',
+    'threads:read', 'threads:write'
+  ],
+  manager: [
+    'fleet:read', 'fleet:write',
+    'kb:read', 'kb:write',
+    'models:read',
+    'macros:read', 'macros:write',
+    'threads:read', 'threads:write'
+  ],
+  agent: [
+    'fleet:read',
+    'kb:read',
+    'macros:read',
+    'threads:read', 'threads:write'
+  ]
+};
