@@ -1,7 +1,7 @@
 import { IRequest, Router, error, json, cors } from 'itty-router';
-import { Env, Role, Action, PERMISSIONS } from './types';
-import { withAuthAndWorkspace, withCorrelationId, requirePermission } from './middleware';
-import { logAudit } from './audit';
+import { Env, PERMISSIONS, Role } from './types';
+import { withAuthAndWorkspace, withCorrelationId, requirePermission, requireStepUp } from './middleware';
+import { logAudit, verifyAuditChain } from './audit';
 import { getCached } from './cache';
 import { routeChat, verifyHFLicense, isModelBlocked } from './modelRouter';
 import { RetentionManager } from './retention';
@@ -11,8 +11,18 @@ import { checkCompliance } from './billingGuard';
 const { preflight, corsify } = cors({ origin: '*', allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], allowHeaders: ['*'] });
 const router = Router<any>();
 
-router.get('/health', () => new Response('OK'));
-router.get('/api/meta/version', () => json({ version: '11.0.0' }));
+// --- HEALTH ---
+router.get('/healthz', () => new Response('OK'));
+router.get('/readyz', async (req: any, env: Env) => {
+  try {
+    await env.DB.prepare('SELECT 1').first();
+    return new Response('READY');
+  } catch (e) {
+    return new Response('UNREADY', { status: 500 });
+  }
+});
+router.get('/api/compliance', (req: any, env: Env) => json(checkCompliance(env)));
+router.get('/api/meta/version', () => json({ version: '10.0.0' }));
 
 router.all('*', preflight);
 router.all('*', withCorrelationId);
@@ -24,9 +34,20 @@ async function hashPassword(password: string): Promise<string> {
   return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+async function verifyTurnstile(token: string, secret?: string) {
+  if (!secret) return true;
+  const formData = new FormData();
+  formData.append('secret', secret);
+  formData.append('response', token);
+  const result = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST', body: formData });
+  return (await result.json() as any).success;
+}
+
 // --- AUTH ---
 router.post('/api/auth/signup', async (req: any, env: Env) => {
-  const { email, password } = await req.json() as any;
+  const { email, password, turnstile_token } = await req.json() as any;
+  if (!email || !password || password.length < 8) return error(400, 'Invalid input');
+  if (!(await verifyTurnstile(turnstile_token, env.TURNSTILE_SECRET_KEY))) return error(400, 'Bot check failed');
   const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
   if (existing) return error(400, 'Exists');
   const id = 'u_' + Date.now();
@@ -41,7 +62,8 @@ router.post('/api/auth/signup', async (req: any, env: Env) => {
 });
 
 router.post('/api/auth/login', async (req: any, env: Env) => {
-  const { email, password } = await req.json() as any;
+  const { email, password, turnstile_token } = await req.json() as any;
+  if (!(await verifyTurnstile(turnstile_token, env.TURNSTILE_SECRET_KEY))) return error(400, 'Bot check failed');
   const user = await env.DB.prepare('SELECT id, role, password_hash FROM users WHERE email = ?').bind(email).first() as any;
   if (!user || ((await hashPassword(password)) !== user.password_hash)) return error(401, 'Failed');
   const sessId = 'sess_' + Math.random().toString(36).slice(2);
@@ -49,102 +71,94 @@ router.post('/api/auth/login', async (req: any, env: Env) => {
   return json({ token: sessId, role: user.role, workspace_id: 'ws_default_public' });
 });
 
-// --- VAULT ENDPOINTS (Ciphertext Only) ---
-router.post('/api/vault/bootstrap', withAuthAndWorkspace, requirePermission('vault:use'), async (req: any, env: Env) => {
-  const { wrapped_dek, kdf_params } = await req.json() as any;
-  await env.DB.prepare(`
-    INSERT INTO vault_keys (workspace_id, user_id, wrapped_dek_by_passphrase, kdf_params_json)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(workspace_id, user_id) DO UPDATE SET 
-      wrapped_dek_by_passphrase = excluded.wrapped_dek_by_passphrase,
-      kdf_params_json = excluded.kdf_params_json,
-      updated_at = CURRENT_TIMESTAMP
-  `).bind(req.workspaceId, req.userId, wrapped_dek, JSON.stringify(kdf_params)).run();
+router.post('/api/auth/step-up', withAuthAndWorkspace, async (req: any, env: Env) => {
+  const { password } = await req.json() as any;
+  const user = await env.DB.prepare('SELECT password_hash FROM users WHERE id = ?').bind(req.userId).first() as any;
+  if (!user || ((await hashPassword(password)) !== user.password_hash)) return error(401, 'Failed');
   
-  await logAudit(env, req.userId!, 'vault_bootstrap', 'vault_keys', null, {}, req.correlationId!, req.workspaceId);
+  await env.DB.prepare('UPDATE sessions SET last_step_up_at = CURRENT_TIMESTAMP WHERE id = ?').bind(req.session.id).run();
   return json({ success: true });
 });
 
-router.get('/api/vault/key', withAuthAndWorkspace, requirePermission('vault:use'), async (req: any, env: Env) => {
-  const key = await env.DB.prepare('SELECT wrapped_dek_by_passphrase, kdf_params_json FROM vault_keys WHERE workspace_id = ? AND user_id = ?').bind(req.workspaceId, req.userId).first() as any;
-  if (!key) return error(404, 'Vault not bootstrapped');
-  return json({
-    wrapped_dek: key.wrapped_dek_by_passphrase,
-    kdf_params: JSON.parse(key.kdf_params_json)
-  });
+// --- QUOTA ---
+router.get('/api/admin/quota/status', withAuthAndWorkspace, requirePermission('models:read'), async (req: any, env: Env) => {
+  return json(await QuotaGovernor.getStatus(env, req.workspaceId));
+});
+router.post('/api/admin/quota/mode', withAuthAndWorkspace, requirePermission('models:write'), requireStepUp, async (req: any, env: Env) => {
+  const { mode } = await req.json() as any;
+  await QuotaGovernor.setMode(env, req.workspaceId, mode);
+  return json({ success: true });
 });
 
-router.get('/api/vault/items', withAuthAndWorkspace, requirePermission('vault:use'), async (req: any, env: Env) => {
-  const { results } = await env.DB.prepare('SELECT * FROM vault_items WHERE workspace_id = ? AND owner_user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC').bind(req.workspaceId, req.userId).all();
-  return json(results.map((r: any) => ({ ...r, iv: JSON.parse(r.iv_json) })));
+// --- APPROVALS ---
+router.get('/api/admin/approvals', withAuthAndWorkspace, requirePermission('kb:write'), async (req: any, env: Env) => {
+  const kbDrafts = await env.DB.prepare('SELECT * FROM kb_drafts WHERE workspace_id = ? AND status != "published"').bind(req.workspaceId).all();
+  return json({ kb: kbDrafts.results });
 });
 
-router.post('/api/vault/items', withAuthAndWorkspace, requirePermission('vault:use'), async (req: any, env: Env) => {
+router.post('/api/kb/drafts', withAuthAndWorkspace, requirePermission('kb:read'), async (req: any, env: Env) => {
   const data = await req.json() as any;
-  const id = 'vitem_' + Date.now() + Math.random().toString(36).slice(2, 5);
-  await env.DB.prepare(`
-    INSERT INTO vault_items (id, workspace_id, owner_user_id, title_enc, username_enc, password_enc, url_enc, notes_enc, tags_enc, iv_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(id, req.workspaceId, req.userId, data.title_enc, data.username_enc, data.password_enc, data.url_enc, data.notes_enc, data.tags_enc, JSON.stringify(data.iv)).run();
-  
-  await logAudit(env, req.userId!, 'vault_item_create', 'vault_item', id, {}, req.correlationId!, req.workspaceId);
+  const id = 'kbd_' + Date.now();
+  await env.DB.prepare(`INSERT INTO kb_drafts (id, document_id, workspace_id, author_id, title, body_text, visibility_role, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft')`)
+    .bind(id, data.document_id || null, req.workspaceId, req.userId, data.title, data.body_text, data.visibility_role || 'agent').run();
   return json({ id });
 });
 
-router.patch('/api/vault/items/:id', withAuthAndWorkspace, requirePermission('vault:use'), async (req: any, env: Env) => {
-  const data = await req.json() as any;
-  await env.DB.prepare(`
-    UPDATE vault_items SET 
-      title_enc = COALESCE(?, title_enc),
-      username_enc = COALESCE(?, username_enc),
-      password_enc = COALESCE(?, password_enc),
-      url_enc = COALESCE(?, url_enc),
-      notes_enc = COALESCE(?, notes_enc),
-      tags_enc = COALESCE(?, tags_enc),
-      iv_json = COALESCE(?, iv_json),
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND owner_user_id = ? AND workspace_id = ?
-  `).bind(data.title_enc, data.username_enc, data.password_enc, data.url_enc, data.notes_enc, data.tags_enc, data.iv ? JSON.stringify(data.iv) : null, req.params.id, req.userId, req.workspaceId).run();
+router.post('/api/admin/approvals/kb/:id/publish', withAuthAndWorkspace, requirePermission('kb:write'), requireStepUp, async (req: any, env: Env) => {
+  const draft = await env.DB.prepare('SELECT * FROM kb_drafts WHERE id = ? AND workspace_id = ?').bind(req.params.id, req.workspaceId).first() as any;
+  if (!draft) return error(404);
   
-  await logAudit(env, req.userId!, 'vault_item_update', 'vault_item', req.params.id, {}, req.correlationId!, req.workspaceId);
-  return json({ success: true });
+  const docId = draft.document_id || 'kb_' + Date.now();
+  
+  await env.DB.batch([
+    env.DB.prepare('INSERT OR REPLACE INTO kb_documents (id, workspace_id, title, body_text, visibility_role, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)')
+      .bind(docId, req.workspaceId, draft.title, draft.body_text, draft.visibility_role),
+    env.DB.prepare('UPDATE kb_drafts SET status = "published" WHERE id = ?').bind(req.params.id)
+  ]);
+  
+  await logAudit(env, req.userId!, 'publish', 'kb_document', docId, { draft_id: req.params.id }, req.correlationId!, req.workspaceId);
+  return json({ success: true, document_id: docId });
 });
 
-router.delete('/api/vault/items/:id', withAuthAndWorkspace, requirePermission('vault:use'), async (req: any, env: Env) => {
-  await env.DB.prepare('UPDATE vault_items SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND owner_user_id = ? AND workspace_id = ?').bind(req.params.id, req.userId, req.workspaceId).run();
-  await logAudit(env, req.userId!, 'vault_item_delete', 'vault_item', req.params.id, {}, req.correlationId!, req.workspaceId);
-  return json({ success: true });
+// --- AUDIT CHAIN VERIFICATION ---
+router.get('/api/admin/audit/verify', withAuthAndWorkspace, requirePermission('audit:read'), async (req: any, env: Env) => {
+  const result = await verifyAuditChain(env, req.workspaceId);
+  return json(result);
 });
 
-// --- REMAINING ENDPOINTS ---
-router.get('/api/me/preferences', withAuthAndWorkspace, async (req: any, env: Env) => {
-  const prefs = await env.DB.prepare('SELECT * FROM user_preferences WHERE user_id = ?').bind(req.userId).first();
-  return json(prefs || { language: 'en', theme: 'light' });
-});
-
-router.get('/api/kb/search', withAuthAndWorkspace, async (req: any, env: Env) => {
-  const q = req.query.q as string;
-  if (!q) return json([]);
-  return await getCached(req as any, async () => {
-    const { results } = await env.DB.prepare(`SELECT title, snippet(kb_fts, -1, '**', '**', '...', 64) as snippet, body_text FROM kb_fts JOIN kb_documents ON kb_documents.rowid = kb_fts.rowid WHERE kb_fts MATCH ? AND visibility_role IN (?, 'agent') AND workspace_id = ? LIMIT 10`).bind(q.replace(/[^a-zA-Z0-9 ]/g, ' '), req.userRole, req.workspaceId).all();
-    return json(results) as any;
-  });
-});
-
+// --- CHAT (with Quota Governor check) ---
 router.post('/api/chat/messages', withAuthAndWorkspace, async (req: any, env: Env) => {
   const { thread_id, content } = await req.json() as any;
+  
+  const qStatus = await QuotaGovernor.getStatus(env, req.workspaceId);
+  if (qStatus.mode === 'read_only') return error(403, 'Workspace is in read-only mode due to quota limits');
+
   await env.DB.prepare('INSERT INTO chat_messages (id, thread_id, role, content) VALUES (?, ?, ?, ?)').bind('msg_' + Date.now(), thread_id, 'user', content).run();
+  
   const kbRaw = await env.DB.prepare(`SELECT title, body_text FROM kb_fts JOIN kb_documents ON kb_documents.rowid = kb_fts.rowid WHERE kb_fts MATCH ? AND visibility_role IN (?, 'agent') AND workspace_id = ? LIMIT 3`).bind(content.replace(/[^a-zA-Z0-9 ]/g, ' '), req.userRole, req.workspaceId).all();
   const kbContext = kbRaw.results as any[];
+
+  // Adaptive routing placeholder: choose model based on task
+  // Canary rollout is handled inside routeChat
   const aiRes = await routeChat(env, req.workspaceId!, [{ role: 'system', content: `Context:\n` + kbContext.map(d => `[${d.title}]: ${d.body_text}`).join('\n\n') }, { role: 'user', content }], thread_id);
+  
   let reply = aiRes.content;
   if (!reply) reply = kbContext.length > 0 ? `Policies:\n\n` + kbContext.map(d => `**${d.title}**: ${d.body_text.slice(0, 200)}...`).join('\n\n') : "No info.";
-  const assistantMsgId = 'msg_' + (Date.now() + 1);
+
   const redactedReply = PIIGuard.redact(reply, (PERMISSIONS[req.userRole as Role] || []).includes('users:read' as any));
-  await env.DB.prepare('INSERT INTO chat_messages (id, thread_id, role, content, metadata_json) VALUES (?, ?, ?, ?, ?)').bind(assistantMsgId, thread_id, 'assistant', redactedReply, JSON.stringify({ model: aiRes.model_id, original: reply })).run();
+  
+  await env.DB.prepare('INSERT INTO chat_messages (id, thread_id, role, content, metadata_json) VALUES (?, ?, ?, ?, ?)').bind('msg_' + (Date.now() + 1), thread_id, 'assistant', redactedReply, JSON.stringify({ model: aiRes.model_id })).run();
+  
   const encoder = new TextEncoder();
-  const stream = new ReadableStream({ start(controller) { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: redactedReply, toolData: { type: 'ModelStatusCard', model: aiRes.model_id, provider: aiRes.provider, correlationId: req.correlationId } })}\n\n`)); controller.enqueue(encoder.encode(`data: [DONE]\n\n`)); controller.close(); } });
+  const stream = new ReadableStream({ start(controller) { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: redactedReply, toolData: { type: 'ModelStatusCard', model: aiRes.model_id, provider: aiRes.provider } })}\n\n`)); controller.enqueue(encoder.encode(`data: [DONE]\n\n`)); controller.close(); } });
   return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
+});
+
+router.get('/api/admin/audit/export.csv', withAuthAndWorkspace, requirePermission('admin:export'), requireStepUp, async (req: any, env: Env) => {
+  const { results } = await env.DB.prepare('SELECT * FROM audit_logs WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 1000').bind(req.workspaceId).all();
+  let csv = 'id,user_id,action,entity,entity_id,correlation_id,prev_hash,entry_hash,created_at\n';
+  results.forEach((r: any) => { csv += `${r.id},${r.user_id},${r.action},${r.entity},${r.entity_id},${r.correlation_id},${r.prev_hash},${r.entry_hash},${r.created_at}\n`; });
+  return new Response(csv, { headers: { 'Content-Type': 'text/csv' } });
 });
 
 router.all('*', () => error(404));

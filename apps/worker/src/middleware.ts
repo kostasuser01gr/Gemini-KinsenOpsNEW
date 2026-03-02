@@ -14,13 +14,14 @@ export const withAuthAndWorkspace = async (req: IRequest & any, env: Env) => {
   const token = req.headers.get('Authorization')?.replace('Bearer ', '');
   if (!token) return error(401, 'Unauthorized');
   
-  const session = await env.DB.prepare('SELECT user_id FROM sessions WHERE id = ? AND expires_at > CURRENT_TIMESTAMP').bind(token).first();
+  const session = await env.DB.prepare('SELECT user_id, last_step_up_at FROM sessions WHERE id = ? AND expires_at > CURRENT_TIMESTAMP').bind(token).first();
   if (!session) return error(401, 'Session expired or invalid');
 
-  const user = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(session.user_id).first();
+  const user = await env.DB.prepare('SELECT id, role FROM users WHERE id = ?').bind(session.user_id).first();
   if (!user) return error(401, 'User not found');
   
   req.userId = user.id as string;
+  req.session = { id: token, lastStepUpAt: session.last_step_up_at };
   
   const requestedWorkspace = req.headers.get('x-workspace-id') || 'ws_default_public';
   const membership = await env.DB.prepare('SELECT role_in_workspace FROM workspace_members WHERE workspace_id = ? AND user_id = ?')
@@ -47,4 +48,13 @@ export const requirePermission = (action: Action) => {
       return error(403, `Forbidden: requires ${action}`);
     }
   };
+};
+
+export const requireStepUp = (req: IRequest & any) => {
+  if (!req.session?.lastStepUpAt) return error(403, 'Step-up authentication required');
+  const lastStepUp = new Date(req.session.lastStepUpAt).getTime();
+  const now = Date.now();
+  if (now - lastStepUp > 15 * 60000) { // 15 minute TTL for step-up
+    return error(403, 'Step-up authentication expired');
+  }
 };
