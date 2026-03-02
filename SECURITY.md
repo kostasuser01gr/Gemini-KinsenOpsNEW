@@ -1,11 +1,14 @@
-# SECURITY.md
+# SECURITY.md (v9)
 
-## Threat Model
-- **Public Signup**: Protected by Turnstile + Token Bucket Rate Limiting.
-- **Model Abuse**: STRICT_FREE_MODE prevents any billing-capable providers from being used.
-- **Data Breaches**: RBAC (Admin/Manager/Agent) limits data visibility. Audit logs trace all actions.
+## Data Privacy
+- **PII Guard**: Automatically redacts emails and phone numbers from chat history.
+- **Reveal Protocol**: Users with `pii:view` permission can reveal redacted content; each reveal is logged in `pii_reveal_logs` for auditing.
 
-## Safeguards
-- **BillingGuard**: Centralized check ensuring no paid API keys exist in strict mode.
-- **Rate Limiting**: Per-IP and per-email limits on sensitive endpoints.
-- **Passkeys**: Optional WebAuthn support for passwordless security.
+## Infrastructure Security
+- **Strict Free Mode**: Block-level enforcement preventing billing-capable subrequests.
+- **Canary Rollouts**: New model providers are tested on 5% traffic before full promotion.
+- **Passkeys**: Opt-in WebAuthn support for administrator actions.
+
+## Governance
+- **Audit Ledger**: Comprehensive tracking of all write operations and sensitive data access.
+- **Role Hierarchy**: Admin > Manager > Agent (Deny-by-default).

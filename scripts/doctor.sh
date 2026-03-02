@@ -12,7 +12,7 @@ if ! command -v node &> /dev/null; then
 fi
 
 # Check Wrangler
-if ! command -v wrangler &> /dev/null && ! npx wrangler --version &> /dev/null; then
+if ! npx wrangler --version &> /dev/null; then
     echo "[!] Wrangler is not installed."
     ERRORS=1
 fi
@@ -22,6 +22,11 @@ if ! grep -q "database_id = " apps/worker/wrangler.toml; then
     echo "[!] Missing database_id in apps/worker/wrangler.toml"
     echo "Fix: Run 'npx wrangler d1 create car-rental-db' and update wrangler.toml."
     ERRORS=1
+fi
+
+# Check for secrets (best effort)
+if ! npx wrangler secret list --name car-rental-api 2>/dev/null | grep -q "STRICT_FREE_MODE"; then
+    echo "[!] STRICT_FREE_MODE secret may be missing on Cloudflare."
 fi
 
 if [ $ERRORS -eq 0 ]; then

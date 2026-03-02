@@ -11,6 +11,8 @@ export interface Model {
   free_policy: string;
   health_status: string;
   cooloff_until?: string;
+  is_canary?: number;
+  canary_percentage?: number;
 }
 
 const BLOCKLIST = ['jailbreak', 'uncensored', 'refusal', 'bypass', 'nsfw', 'exploit', 'illegal', 'dolphin', 'roleplay'];

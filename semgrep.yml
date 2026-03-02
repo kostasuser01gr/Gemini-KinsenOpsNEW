@@ -1,0 +1,17 @@
+rules:
+  - id: worker-secret-exposure
+    patterns:
+      - pattern: env.$SECRET
+      - metavariable-regex:
+          metavariable: $SECRET
+          regex: (?i)(key|token|password|auth)
+    message: Potential exposure of secret in worker. Ensure it is handled securely.
+    languages: [typescript]
+    severity: WARNING
+
+  - id: insecure-crypto-digest
+    patterns:
+      - pattern: crypto.subtle.digest('SHA-1', ...)
+    message: Use a stronger hash algorithm like SHA-256 or SHA-512.
+    languages: [typescript]
+    severity: ERROR

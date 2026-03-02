@@ -73,7 +73,7 @@ backup:
 	@./scripts/backup.sh $(TOKEN)
 
 restore:
-	@./scripts/restore.sh https://car-rental-api.dataos-api.workers.dev $(TOKEN) $(FILE)
+	@./scripts/restore.sh https://car-rental-api.dataos-api.workers.dev $(TOKEN) $(FILE) $(DRY_RUN)
 
 release:
 	@./scripts/release.sh $(VERSION)

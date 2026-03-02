@@ -1,15 +1,16 @@
-# OPS.md
+# Operations & Limits (v9)
 
-## Limits
-- **Workers**: 100k req/day free. 10ms CPU limit.
-- **D1**: 5M read/100k write/day. 500MB storage.
+## Quota Governor
+- **Dynamic Throttling**: Automatically increases caching and disables expensive features when nearing D1 write limits.
+- **Thresholds**: Alerts at 80% of daily 100k D1 write limit.
+- **Status API**: `/api/admin/quota/status` provides real-time governance metrics.
 
-## Caching Strategy
-- Cache KB results for 60s.
-- Cache thread lists for 30s.
-- Invalidate on write (best effort).
+## Recovery & Resiliency
+- **Recovery Mode**: Frontend automatically switches to read-only offline-first UI when API errors spike.
+- **Error Envelope**: Every API error contains a `correlation_id` and `retry_after` hint.
+- **Operation Replay**: `scripts/retry_failed_ops.sh` allows replaying idempotent failed actions from logs.
 
-## Data Retention
-- Old threads archived to `archived_chat_threads` after 30 days.
-- Audit logs rolled up daily to `audit_rollups_daily`.
-- Triggered manually via Admin UI or daily Cron.
+## Performance
+- **FAST Search**: Default FTS5 indexing.
+- **DEEP Search**: Scoped thread search (restricted to prevent full table scans).
+- **Search Cost**: UI shows complexity estimates to discourage heavy queries.

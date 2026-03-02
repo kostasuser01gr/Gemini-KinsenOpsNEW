@@ -1,14 +1,23 @@
-# ROADMAP.md
+# Ops Copilot Roadmap (v9)
 
-## P0: Compliance & Safety
-- ✅ BillingGuard for never-bill policy.
-- ✅ Turnstile verification.
+## Phase 1 (Completed)
+- ✅ Free-only Model Router
+- ✅ Auto-Fallback Circuit Breaker
+- ✅ KB Citations & FTS5
 
-## P1: Performance & Scale
-- ✅ D1 Data Retention engine.
-- ✅ Model Router Budgets.
+## Phase 2 (Completed)
+- ✅ PWA & Offline Storage
+- ✅ i18n EL/EN Toggle
+- ✅ Data Retention Manager
+
+## Phase 3 (v9 Operator Pack - Completed)
+- ✅ **Quota Governor**: Limit protection.
+- ✅ **PII Guard**: Automated redaction.
+- ✅ **Canary Rollouts**: Safe model testing.
+- ✅ **Recovery Mode**: Resilient UI.
+- ✅ **Semantic Release**: Tag-driven deployments.
 
 ## Future
-- [ ] Collaborative editing via Durable Objects.
-- [ ] Voice-to-text integration.
-- [ ] Native mobile app wrapper.
+- [ ] Collaborative Threads via Durable Objects.
+- [ ] Hybrid Vector Search (Cloudflare Vectorize).
+- [ ] SOP Auto-Generation.

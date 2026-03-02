@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
   Plus, MessageSquare, Settings, LogOut, Send, Car, ShieldAlert, 
-  Search, Copy, Check, Command, Archive, Bookmark, 
+  Search, Copy, Check, Command, Archive, Bookmark, Server,
   Activity, ChevronRight, Hash, Pin, Globe, 
   Database, UploadCloud, BarChart, AlertTriangle, RefreshCcw
 } from 'lucide-react';
@@ -40,8 +40,20 @@ function App() {
   const [showCmdK, setShowCmdK] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [showVersionModal, setShowVersionModal] = useState(false);
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const cmdKInputRef = useRef<HTMLInputElement>(null);
+
+  const checkAppVersion = async () => {
+    const res = await fetch(`${API_BASE}/api/meta/version`);
+    if (res.ok) {
+      const { version } = await res.json();
+      const lastSeen = localStorage.getItem('last_seen_version');
+      if (lastSeen && lastSeen !== version) setShowVersionModal(true);
+      localStorage.setItem('last_seen_version', version);
+    }
+  };
 
   const fetchWithAuth = async (url: string, opts: any = {}) => {
     const headers = { ...opts.headers, Authorization: `Bearer ${token}`, 'x-correlation-id': 'req_' + Date.now(), 'x-workspace-id': localStorage.getItem('workspace_id') || 'ws_default_public' };
@@ -64,9 +76,19 @@ function App() {
     const handleOffline = () => setIsOffline(true);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-    if (token) { fetchThreads(); fetchPrefs(); }
+    if (token) { fetchThreads(); fetchPrefs(); checkAppVersion(); }
     return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); };
   }, [token, isOffline]);
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === 'k' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); setShowCmdK(p => !p); }
+      if (e.key === '/' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); setShowShortcutsHelp(p => !p); }
+      if (e.key === 'Escape') { setShowCmdK(false); setShowShortcutsHelp(false); setShowVersionModal(false); }
+    }
+    document.addEventListener('keydown', down);
+    return () => document.removeEventListener('keydown', down);
+  }, []);
 
   const fetchMessages = async (id: string) => {
     const res = await fetchWithAuth(`${API_BASE}/api/chat/threads/${id}/messages`);
@@ -75,16 +97,6 @@ function App() {
 
   useEffect(() => { if (activeThreadId && !isOffline) fetchMessages(activeThreadId); }, [activeThreadId, isOffline]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
-
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.key === 'k' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); setShowCmdK(p => !p); }
-      if (e.key === 'Escape') setShowCmdK(false);
-      if (e.key === '?' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); alert("Shortcuts:\nCmd+K: Palette\nCmd+Enter: Send\nEsc: Close"); }
-    }
-    document.addEventListener('keydown', down);
-    return () => document.removeEventListener('keydown', down);
-  }, []);
 
   const savePrefs = async (p: any) => {
     const res = await fetchWithAuth(`${API_BASE}/api/me/preferences`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
@@ -233,7 +245,7 @@ function App() {
           <div className="flex-1 overflow-y-auto p-12 md:p-24 text-gray-900">
             <button onClick={()=>setView('chat')} className="mb-12 text-xs font-black uppercase flex items-center gap-3 text-blue-600 hover:scale-105 transition-all"><ChevronRight size={16} className="rotate-180"/> Back</button>
             {view === 'admin' && <div className="max-w-6xl"><h1 className="text-7xl font-black mb-4 tracking-tighter">Ops Admin</h1><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mt-20">
-              {[{ id: 'kpis', icon: BarChart, title: 'AI Analytics' }, { id: 'compliance', icon: RefreshCcw, title: 'Compliance' }, { id: 'quota', icon: Activity, title: 'Quota Governor' }, { id: 'retention', icon: Database, title: 'Retention' }, { id: 'import_export', icon: UploadCloud, title: 'Snapshot' }, { id: 'audit', icon: ShieldAlert, title: 'Security' }].map(card => (
+              {[{ id: 'kpis', icon: BarChart, title: 'AI Analytics' }, { id: 'compliance', icon: RefreshCcw, title: 'Compliance' }, { id: 'quota', icon: Activity, title: 'Quota Governor' }, { id: 'models', icon: Server, title: 'Canary Rollout' }, { id: 'retention', icon: Database, title: 'Retention' }, { id: 'import_export', icon: UploadCloud, title: 'Snapshot' }, { id: 'audit', icon: ShieldAlert, title: 'Security' }].map(card => (
                 <button key={card.id} onClick={()=>loadAdmin(card.id as any)} className="text-left bg-white border border-gray-100 p-10 rounded-[48px] shadow-sm hover:shadow-2xl transition-all group">
                   <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-[24px] flex items-center justify-center mb-8 group-hover:scale-110 transition-transform"><card.icon size={32}/></div>
                   <h3 className="text-2xl font-black tracking-tight">{card.title}</h3>
@@ -250,11 +262,51 @@ function App() {
               </div>
             )}
             {view === 'compliance' && compliance && <div className="max-w-4xl space-y-12"><h2 className="text-5xl font-black tracking-tighter">Compliance Ledger</h2><div className="grid grid-cols-2 gap-8"><div className="bg-gray-50 p-10 rounded-[40px] border shadow-xl"><div className="text-[10px] font-black uppercase text-gray-400 mb-2">Strict Free Mode</div><div className="text-3xl font-black text-green-600">ENFORCED</div></div><div className="bg-gray-50 p-10 rounded-[40px] border shadow-xl"><div className="text-[10px] font-black uppercase text-gray-400 mb-2">Guard Status</div><div className="text-3xl font-black text-green-600">COMPLIANT</div></div></div></div>}
+            {view === 'models' && (
+              <div className="max-w-5xl space-y-12 animate-in fade-in duration-500">
+                <h2 className="text-5xl font-black tracking-tighter">Canary Rollouts</h2>
+                <div className="bg-white border p-10 rounded-[40px] shadow-2xl space-y-8">
+                  <div className="p-10 bg-gray-50 rounded-[32px] border border-gray-100 flex items-center justify-between">
+                    <div>
+                      <div className="font-black text-xl italic text-blue-600">Dynamic Load Balancing</div>
+                      <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mt-1">Experimental model testing active</p>
+                    </div>
+                    <div className="w-16 h-16 bg-blue-600 rounded-3xl flex items-center justify-center text-white shadow-2xl shadow-blue-500/20"><Activity size={32}/></div>
+                  </div>
+                </div>
+              </div>
+            )}
             {view === 'settings' && <div className="max-w-3xl space-y-16"><h1 className="text-6xl font-black mb-4 tracking-tighter">Settings</h1><div className="flex items-center justify-between p-10 bg-gray-50 rounded-[40px] border shadow-2xl"><div className="flex items-center gap-8"><div className="w-16 h-16 bg-blue-600 rounded-3xl flex items-center justify-center text-white shadow-2xl"><Globe size={32}/></div><div><h3 className="text-2xl font-black tracking-tight">Language</h3></div></div><select value={prefs.language} onChange={e=>savePrefs({language: e.target.value})} className="bg-white border-0 rounded-2xl p-5 font-black uppercase text-xs shadow-xl outline-none"><option value="en">English</option><option value="el">Ελληνικά</option></select></div></div>}
           </div>
         )}
       </main>
       {showCmdK && <div className="fixed inset-0 z-[100] flex items-start justify-center pt-24 px-4 bg-gray-900/80 backdrop-blur-xl" onClick={()=>setShowCmdK(false)}><div className="w-full max-w-3xl bg-white rounded-[48px] shadow-2xl overflow-hidden" onClick={e=>e.stopPropagation()}><div className="flex items-center gap-6 px-10 py-8 border-b"><Command size={32} className="text-blue-600"/><input ref={cmdKInputRef} autoFocus placeholder="Search commands..." className="w-full outline-none text-2xl font-black text-gray-900"/></div><div className="p-6">{[{ i: Plus, t: "New Conversation", act: createThread }, { i: RefreshCcw, t: "Compliance", act: ()=>loadAdmin('compliance') }, { i: ShieldAlert, t: "Admin", act: ()=>setView('admin') }].map((item, idx) => (<button key={idx} onClick={()=>{item.act(); setShowCmdK(false);}} className="w-full text-left px-6 py-6 hover:bg-gray-50 rounded-[32px] flex items-center gap-8 transition-all transform active:scale-95"><div className="w-16 h-16 bg-blue-50 text-blue-500 rounded-[24px] flex items-center justify-center"><item.i size={28}/></div><div className="font-black text-xl text-gray-900">{item.t}</div></button>))}</div></div></div>}
+
+      {showVersionModal && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white p-10 rounded-[40px] shadow-2xl max-w-lg w-full text-center">
+            <h2 className="text-3xl font-black mb-4">What's New in v9.0</h2>
+            <p className="text-gray-500 mb-8">We've added Quota Governor, PII Guard, and deep search capabilities to keep the platform safe and scalable.</p>
+            <button onClick={() => setShowVersionModal(false)} className="w-full bg-blue-600 text-white p-4 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-700 transition-all">Got it</button>
+          </div>
+        </div>
+      )}
+
+      {showShortcutsHelp && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white p-10 rounded-[40px] shadow-2xl max-w-md w-full">
+            <h2 className="text-2xl font-black mb-6 flex items-center gap-3"><Command size={24}/> Keyboard Shortcuts</h2>
+            <div className="space-y-4 text-sm font-bold text-gray-600 uppercase tracking-widest">
+              <div className="flex justify-between border-b pb-2"><span>Palette</span><kbd className="bg-gray-100 px-2 py-1 rounded">⌘K</kbd></div>
+              <div className="flex justify-between border-b pb-2"><span>Send</span><kbd className="bg-gray-100 px-2 py-1 rounded">Enter</kbd></div>
+              <div className="flex justify-between border-b pb-2"><span>New Line</span><kbd className="bg-gray-100 px-2 py-1 rounded">Shift+Enter</kbd></div>
+              <div className="flex justify-between border-b pb-2"><span>Close Modals</span><kbd className="bg-gray-100 px-2 py-1 rounded">Esc</kbd></div>
+              <div className="flex justify-between"><span>Help</span><kbd className="bg-gray-100 px-2 py-1 rounded">⌘/</kbd></div>
+            </div>
+            <button onClick={() => setShowShortcutsHelp(false)} className="mt-10 w-full bg-gray-900 text-white p-4 rounded-2xl font-black uppercase tracking-widest hover:bg-black transition-all">Close</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
