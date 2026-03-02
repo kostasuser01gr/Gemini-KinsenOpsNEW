@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
-  Plus, MessageSquare, Settings, LogOut, Send, Car, Download, ShieldAlert, 
-  FileText, Server, Search, Copy, Check, Command, Archive, Bookmark, 
-  Activity, Paperclip, ChevronRight, Hash, Pin, Globe, Moon, Sun, 
-  Database, UploadCloud, BarChart, AlertTriangle, RefreshCcw, Info
+  Plus, MessageSquare, Settings, LogOut, Send, Car, ShieldAlert, 
+  Search, Copy, Check, Command, Archive, Bookmark, 
+  Activity, ChevronRight, Hash, Pin, Globe, 
+  Database, UploadCloud, BarChart, AlertTriangle, RefreshCcw
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Turnstile } from '@marsidev/react-turnstile';
@@ -28,38 +28,20 @@ function App() {
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [view, setView] = useState<'chat' | 'admin' | 'audit' | 'kb' | 'models' | 'settings' | 'retention' | 'kpis' | 'import_export' | 'compliance'>('chat');
+  const [view, setView] = useState<'chat' | 'admin' | 'audit' | 'kb' | 'models' | 'settings' | 'retention' | 'kpis' | 'import_export' | 'compliance' | 'quota'>('chat');
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeFolder, setActiveFolder] = useState('inbox');
+  const [activeFolder] = useState('inbox');
   const [prefs, setPrefs] = useState({ language: 'en', theme: 'light', compact_mode: 0 });
-  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [_auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [_kpis, setKpis] = useState<any[]>([]);
   const [compliance, setCompliance] = useState<any>(null);
+  const [quota, setQuota] = useState<any>(null);
+  const [isRecoveryMode, setIsRecoveryMode] = useState(false);
   const [showCmdK, setShowCmdK] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const cmdKInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const handleOnline = () => setIsOffline(false);
-    const handleOffline = () => setIsOffline(true);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    if (token) { fetchThreads(); fetchPrefs(); }
-    return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); };
-  }, [token]);
-
-  useEffect(() => { if (activeThreadId && !isOffline) fetchMessages(activeThreadId); }, [activeThreadId, isOffline]);
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
-
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.key === 'k' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); setShowCmdK(p => !p); }
-      if (e.key === 'Escape') setShowCmdK(false);
-    }
-    document.addEventListener('keydown', down);
-    return () => document.removeEventListener('keydown', down);
-  }, []);
 
   const fetchWithAuth = async (url: string, opts: any = {}) => {
     const headers = { ...opts.headers, Authorization: `Bearer ${token}`, 'x-correlation-id': 'req_' + Date.now(), 'x-workspace-id': localStorage.getItem('workspace_id') || 'ws_default_public' };
@@ -71,6 +53,39 @@ function App() {
     if (res.ok) { const d = await res.json(); setPrefs(d); if (d.language) i18n.changeLanguage(d.language); }
   };
 
+  const fetchThreads = async () => {
+    if (isOffline) { setThreads(await getThreadsOffline()); return; }
+    const res = await fetchWithAuth(`${API_BASE}/api/chat/threads`);
+    if (res.ok) { const d = await res.json(); setThreads(d); saveThreadsOffline(d); if (d.length > 0 && !activeThreadId) setActiveThreadId(d[0].id); }
+  };
+
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    if (token) { fetchThreads(); fetchPrefs(); }
+    return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); };
+  }, [token, isOffline]);
+
+  const fetchMessages = async (id: string) => {
+    const res = await fetchWithAuth(`${API_BASE}/api/chat/threads/${id}/messages`);
+    if (res.ok) setMessages(await res.json());
+  };
+
+  useEffect(() => { if (activeThreadId && !isOffline) fetchMessages(activeThreadId); }, [activeThreadId, isOffline]);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === 'k' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); setShowCmdK(p => !p); }
+      if (e.key === 'Escape') setShowCmdK(false);
+      if (e.key === '?' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); alert("Shortcuts:\nCmd+K: Palette\nCmd+Enter: Send\nEsc: Close"); }
+    }
+    document.addEventListener('keydown', down);
+    return () => document.removeEventListener('keydown', down);
+  }, []);
+
   const savePrefs = async (p: any) => {
     const res = await fetchWithAuth(`${API_BASE}/api/me/preferences`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
     if (res.ok) { setPrefs({ ...prefs, ...p }); if (p.language) i18n.changeLanguage(p.language); }
@@ -80,17 +95,6 @@ function App() {
     e.preventDefault();
     const res = await fetch(`${API_BASE}${isLogin ? '/api/auth/login' : '/api/auth/signup'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, turnstile_token: turnstileToken }) });
     if (res.ok) { const d = await res.json(); setToken(d.token); setRole(d.role); localStorage.setItem('token', d.token); localStorage.setItem('role', d.role); localStorage.setItem('workspace_id', d.workspace_id); } else alert('Auth failed');
-  };
-
-  const fetchThreads = async () => {
-    if (isOffline) { setThreads(await getThreadsOffline()); return; }
-    const res = await fetchWithAuth(`${API_BASE}/api/chat/threads`);
-    if (res.ok) { const d = await res.json(); setThreads(d); saveThreadsOffline(d); if (d.length > 0 && !activeThreadId) setActiveThreadId(d[0].id); }
-  };
-
-  const fetchMessages = async (id: string) => {
-    const res = await fetchWithAuth(`${API_BASE}/api/chat/threads/${id}/messages`);
-    if (res.ok) setMessages(await res.json());
   };
 
   const createThread = async () => {
@@ -114,8 +118,21 @@ function App() {
     } catch(e: any) { setMessages(p => [...p, { id: 'err', role: 'assistant', content: `Error: ${e.message}` }]); } finally { setLoading(false); fetchThreads(); }
   };
 
+  const revealPII = async (msgId: string) => {
+    const res = await fetchWithAuth(`${API_BASE}/api/chat/messages/${msgId}/reveal`, { method: 'POST' });
+    if (res.ok) { const data = await res.json(); setMessages(prev => prev.map(m => m.id === msgId ? { ...m, content: data.original } : m)); }
+  };
+
   const handleLogout = () => { setToken(null); setRole(null); localStorage.clear(); setThreads([]); setMessages([]); setActiveThreadId(null); };
-  const loadAdmin = async (v: any) => { setView(v); if (v === 'audit') { const r = await fetchWithAuth(`${API_BASE}/api/admin/audit`); if(r.ok) setAuditLogs(await r.json()); } if (v === 'compliance') { const r = await fetchWithAuth(`${API_BASE}/api/admin/compliance/status`); if(r.ok) setCompliance(await r.json()); } };
+  const loadAdmin = async (v: any) => { 
+    setView(v); 
+    try {
+      if (v === 'audit') { const r = await fetchWithAuth(`${API_BASE}/api/admin/audit`); if(r.ok) setAuditLogs(await r.json()); } 
+      if (v === 'compliance') { const r = await fetchWithAuth(`${API_BASE}/api/admin/compliance/status`); if(r.ok) setCompliance(await r.json()); }
+      if (v === 'quota') { const r = await fetchWithAuth(`${API_BASE}/api/admin/quota/status`); if(r.ok) setQuota(await r.json()); }
+      if (v === 'kpis') { const r = await fetchWithAuth(`${API_BASE}/api/admin/models/kpis`); if(r.ok) setKpis(await r.json()); }
+    } catch(e) { setIsRecoveryMode(true); }
+  };
   const copy = (t: string, id: string) => { navigator.clipboard.writeText(t); setCopiedId(id); setTimeout(()=>setCopiedId(null), 2000); };
 
   if (!token) return (
@@ -124,16 +141,14 @@ function App() {
         <div className="flex justify-center mb-8"><div className="w-20 h-20 bg-blue-600 rounded-3xl flex items-center justify-center text-white shadow-2xl shadow-blue-500/40"><Car size={40}/></div></div>
         <h2 className="text-4xl font-black mb-2 tracking-tighter italic">Ops Portal</h2>
         <div className="flex rounded-2xl bg-gray-100 p-1.5 my-8">
-          <button onClick={() => setIsLogin(true)} className={`flex-1 py-3 text-xs font-black uppercase rounded-xl transition-all ${isLogin ? 'bg-white shadow-xl text-blue-600' : 'text-gray-400'}`}>Sign In</button>
-          <button onClick={() => setIsLogin(false)} className={`flex-1 py-3 text-xs font-black uppercase rounded-xl transition-all ${!isLogin ? 'bg-white shadow-xl text-blue-600' : 'text-gray-400'}`}>Sign Up</button>
+          <button onClick={() => setIsLogin(true)} className={`flex-1 py-3 text-xs font-black uppercase rounded-xl transition-all ${isLogin ? 'bg-white shadow-xl text-blue-600' : 'text-gray-400'}`}>{t('common.login')}</button>
+          <button onClick={() => setIsLogin(false)} className={`flex-1 py-3 text-xs font-black uppercase rounded-xl transition-all ${!isLogin ? 'bg-white shadow-xl text-blue-600' : 'text-gray-400'}`}>{t('common.signup')}</button>
         </div>
         <form onSubmit={handleAuthSubmit} className="space-y-6">
           <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" className="w-full bg-gray-50 border-0 rounded-2xl p-5 outline-none focus:ring-4 focus:ring-blue-500/10 font-bold" required/>
           <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password" minLength={8} className="w-full bg-gray-50 border-0 rounded-2xl p-5 outline-none focus:ring-4 focus:ring-blue-500/10 font-bold" required/>
           <div className="flex justify-center py-2"><Turnstile siteKey={TURNSTILE_SITE_KEY} onSuccess={setTurnstileToken} /></div>
-          <button type="submit" disabled={!turnstileToken} className="w-full bg-gray-900 text-white p-5 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-600 shadow-2xl">
-            {isLogin ? 'Access Hub' : 'Create Profile'}
-          </button>
+          <button type="submit" disabled={!turnstileToken} className="w-full bg-gray-900 text-white p-5 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-600 shadow-2xl">{isLogin ? 'Access Hub' : 'Create Profile'}</button>
         </form>
       </div>
     </div>
@@ -184,6 +199,7 @@ function App() {
       </aside>
 
       <main className={`flex-1 flex flex-col min-w-0 ${prefs.theme === 'dark' ? 'bg-[#050505]' : 'bg-white'} relative transition-colors duration-500`}>
+        {isRecoveryMode && <div className="bg-red-600 text-white p-3 text-center text-xs font-black uppercase tracking-widest flex items-center justify-center gap-4"><AlertTriangle size={14}/> Recovery Mode: API Unstable. Using Offline Cache. <button onClick={() => setIsRecoveryMode(false)} className="underline">Dismiss</button></div>}
         {view === 'chat' ? (
           <>
             <header className={`h-20 border-b ${prefs.theme === 'dark' ? 'border-white/5' : 'border-gray-100'} flex items-center justify-between px-10 shrink-0 z-10 bg-inherit/80 backdrop-blur-3xl sticky top-0`}>
@@ -195,32 +211,46 @@ function App() {
               {messages.map((m, i) => (
                 <div key={m.id || i} className={`flex gap-8 ${m.role === 'user' ? 'justify-end' : ''}`}>
                   <div className={`max-w-3xl px-8 py-7 rounded-[32px] relative group shadow-2xl ${m.role === 'user' ? 'bg-blue-600 text-white shadow-blue-500/20' : 'bg-gray-50 border border-gray-100 text-gray-800'}`}>
-                    {m.role === 'assistant' && <button onClick={() => copy(m.content, m.id)} className="absolute -top-4 -right-4 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-black bg-white border border-gray-100 p-3 rounded-2xl shadow-2xl transition-all">{copiedId === m.id ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}</button>}
+                    {m.role === 'assistant' && (
+                      <div className="absolute -top-4 -right-12 flex flex-col gap-2">
+                        <button onClick={() => copy(m.content, m.id)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-black bg-white border border-gray-100 p-3 rounded-2xl shadow-2xl transition-all">{copiedId === m.id ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}</button>
+                        {m.content.includes('[REDACTED]') && <button onClick={() => revealPII(m.id)} className="opacity-0 group-hover:opacity-100 text-blue-600 bg-white border border-gray-100 p-3 rounded-2xl shadow-2xl transition-all" title="Reveal PII"><Search size={16}/></button>}
+                      </div>
+                    )}
                     <div className={`prose ${m.role === 'user' ? 'prose-invert' : 'prose-slate'} max-w-none font-bold`}><ReactMarkdown>{m.content}</ReactMarkdown></div>
-                    {m.toolData && <div className="mt-8 border-t border-black/5 pt-6 text-[10px] font-black uppercase text-gray-400 flex items-center gap-4"><div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"/> {m.toolData.model} ({m.toolData.provider})</div>}
+                    {m.toolData && <div className="mt-8 border-t border-black/5 pt-6 text-[10px] font-black uppercase text-gray-400 flex items-center gap-4"><div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"/> {m.toolData.model} ({m.toolData.provider}) • {m.toolData.correlationId}</div>}
                   </div>
                 </div>
               ))}
               <div ref={messagesEndRef} className="h-32" />
             </div>
             <footer className={`p-8 md:p-12 border-t ${prefs.theme === 'dark' ? 'border-white/5' : 'border-gray-100'} sticky bottom-0 bg-inherit/80 backdrop-blur-3xl`}>
-              <form onSubmit={sendMessage} className="max-w-4xl mx-auto relative flex items-end gap-4"><textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault(); sendMessage(e);}}} placeholder="Ask Ops Copilot..." className="w-full bg-gray-50 border-0 rounded-[32px] py-6 pl-8 pr-20 outline-none focus:bg-white focus:ring-8 focus:ring-blue-500/5 transition-all shadow-2xl shadow-inner resize-none min-h-[80px] font-bold text-lg" rows={1} disabled={loading||isOffline}/><button type="submit" disabled={loading||!input.trim()||isOffline} className="bg-gray-900 text-white p-4 rounded-full hover:bg-blue-600 disabled:bg-gray-100 transition-all shadow-2xl">{loading ? <RefreshCcw size={24} className="animate-spin"/> : <Send size={24}/>}</button></form>
+              <form onSubmit={sendMessage} className="max-w-4xl mx-auto relative flex items-end gap-4"><textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault(); sendMessage(e);}}} placeholder="Ask Ops..." className="w-full bg-gray-50 border-0 rounded-[32px] py-6 pl-8 pr-20 outline-none focus:bg-white focus:ring-8 focus:ring-blue-500/5 transition-all shadow-2xl shadow-inner resize-none min-h-[80px] font-bold text-lg" rows={1} disabled={loading||isOffline}/><button type="submit" disabled={loading||!input.trim()||isOffline} className="bg-gray-900 text-white p-4 rounded-full hover:bg-blue-600 shadow-2xl">{loading ? <RefreshCcw size={24} className="animate-spin"/> : <Send size={24}/>}</button></form>
               <div className="mt-6 text-center text-[10px] uppercase tracking-[0.4em] opacity-30 font-black">Never-Bill Guard • Auto-Archive</div>
             </footer>
           </>
         ) : (
-          <div className="flex-1 overflow-y-auto p-12 md:p-24">
+          <div className="flex-1 overflow-y-auto p-12 md:p-24 text-gray-900">
             <button onClick={()=>setView('chat')} className="mb-12 text-xs font-black uppercase flex items-center gap-3 text-blue-600 hover:scale-105 transition-all"><ChevronRight size={16} className="rotate-180"/> Back</button>
             {view === 'admin' && <div className="max-w-6xl"><h1 className="text-7xl font-black mb-4 tracking-tighter">Ops Admin</h1><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mt-20">
-              {[{ id: 'kpis', icon: BarChart, title: 'AI Analytics' }, { id: 'compliance', icon: RefreshCcw, title: 'Compliance' }, { id: 'retention', icon: Database, title: 'Retention' }, { id: 'import_export', icon: UploadCloud, title: 'Portability' }, { id: 'audit', icon: ShieldAlert, title: 'Security' }].map(card => (
+              {[{ id: 'kpis', icon: BarChart, title: 'AI Analytics' }, { id: 'compliance', icon: RefreshCcw, title: 'Compliance' }, { id: 'quota', icon: Activity, title: 'Quota Governor' }, { id: 'retention', icon: Database, title: 'Retention' }, { id: 'import_export', icon: UploadCloud, title: 'Snapshot' }, { id: 'audit', icon: ShieldAlert, title: 'Security' }].map(card => (
                 <button key={card.id} onClick={()=>loadAdmin(card.id as any)} className="text-left bg-white border border-gray-100 p-10 rounded-[48px] shadow-sm hover:shadow-2xl transition-all group">
                   <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-[24px] flex items-center justify-center mb-8 group-hover:scale-110 transition-transform"><card.icon size={32}/></div>
-                  <h3 className="text-2xl font-black text-gray-900 tracking-tight">{card.title}</h3>
+                  <h3 className="text-2xl font-black tracking-tight">{card.title}</h3>
                 </button>
               ))}
             </div></div>}
-            {view === 'compliance' && compliance && <div className="max-w-4xl space-y-12 text-gray-900"><h2 className="text-5xl font-black tracking-tighter">Compliance Ledger</h2><div className="grid grid-cols-2 gap-8"><div className="bg-gray-50 p-10 rounded-[40px] border shadow-xl"><div className="text-[10px] font-black uppercase text-gray-400 mb-2">Strict Free Mode</div><div className="text-3xl font-black text-green-600">ENFORCED</div></div><div className="bg-gray-50 p-10 rounded-[40px] border shadow-xl"><div className="text-[10px] font-black uppercase text-gray-400 mb-2">Guard Status</div><div className="text-3xl font-black text-green-600">COMPLIANT</div></div></div></div>}
-            {view === 'settings' && <div className="max-w-3xl space-y-16 text-gray-900"><h1 className="text-6xl font-black mb-4 tracking-tighter">Settings</h1><div className="flex items-center justify-between p-10 bg-gray-50 rounded-[40px] border shadow-2xl"><div className="flex items-center gap-8"><div className="w-16 h-16 bg-blue-600 rounded-3xl flex items-center justify-center text-white shadow-2xl"><Globe size={32}/></div><div><h3 className="text-2xl font-black tracking-tight">Language</h3></div></div><select value={prefs.language} onChange={e=>savePrefs({language: e.target.value})} className="bg-white border-0 rounded-2xl p-5 font-black uppercase text-xs shadow-xl outline-none"><option value="en">English</option><option value="el">Ελληνικά</option></select></div></div>}
+            {view === 'quota' && quota && (
+              <div className="max-w-4xl space-y-12">
+                <h2 className="text-5xl font-black tracking-tighter">Quota Status</h2>
+                <div className="bg-white border p-10 rounded-[40px] shadow-2xl">
+                  <div className="flex items-center gap-4 mb-8"><div className={`w-4 h-4 rounded-full ${quota.isThrottled ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}/><span className="text-2xl font-black uppercase tracking-tight">{quota.isThrottled ? 'Throttled' : 'Nominal'}</span></div>
+                  <div className="grid grid-cols-2 gap-8"><div className="p-6 bg-gray-50 rounded-3xl"><div className="text-xs font-black text-gray-400 uppercase mb-2">Cache Override</div><div className="text-xl font-bold">{quota.cacheTTLOverride || 'Default'}s</div></div><div className="p-6 bg-gray-50 rounded-3xl"><div className="text-xs font-black text-gray-400 uppercase mb-2">Expensive Features</div><div className="text-xl font-bold">{quota.expensiveFeaturesDisabled ? 'DISABLED' : 'ENABLED'}</div></div></div>
+                </div>
+              </div>
+            )}
+            {view === 'compliance' && compliance && <div className="max-w-4xl space-y-12"><h2 className="text-5xl font-black tracking-tighter">Compliance Ledger</h2><div className="grid grid-cols-2 gap-8"><div className="bg-gray-50 p-10 rounded-[40px] border shadow-xl"><div className="text-[10px] font-black uppercase text-gray-400 mb-2">Strict Free Mode</div><div className="text-3xl font-black text-green-600">ENFORCED</div></div><div className="bg-gray-50 p-10 rounded-[40px] border shadow-xl"><div className="text-[10px] font-black uppercase text-gray-400 mb-2">Guard Status</div><div className="text-3xl font-black text-green-600">COMPLIANT</div></div></div></div>}
+            {view === 'settings' && <div className="max-w-3xl space-y-16"><h1 className="text-6xl font-black mb-4 tracking-tighter">Settings</h1><div className="flex items-center justify-between p-10 bg-gray-50 rounded-[40px] border shadow-2xl"><div className="flex items-center gap-8"><div className="w-16 h-16 bg-blue-600 rounded-3xl flex items-center justify-center text-white shadow-2xl"><Globe size={32}/></div><div><h3 className="text-2xl font-black tracking-tight">Language</h3></div></div><select value={prefs.language} onChange={e=>savePrefs({language: e.target.value})} className="bg-white border-0 rounded-2xl p-5 font-black uppercase text-xs shadow-xl outline-none"><option value="en">English</option><option value="el">Ελληνικά</option></select></div></div>}
           </div>
         )}
       </main>

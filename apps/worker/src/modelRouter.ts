@@ -130,11 +130,18 @@ export async function callModel(env: Env, model: Model, messages: any[]): Promis
 export async function routeChat(env: Env, workspaceId: string, messages: any[], threadId?: string, preferredModelId?: string): Promise<{ content: string, model_id: string, provider: string, fallbacks: string[] }> {
   const start = Date.now();
   const nowStr = new Date().toISOString();
-  const candidates = (await env.DB.prepare(`SELECT * FROM models WHERE workspace_id = ? AND enabled = 1 ORDER BY priority DESC`).bind(workspaceId).all()).results as unknown as Model[];
+  const candidates = (await env.DB.prepare(`SELECT * FROM models WHERE workspace_id = ? AND enabled = 1 ORDER BY priority DESC`).bind(workspaceId).all()).results as unknown as Model[] & any[];
   
   const eligible = candidates.filter(m => {
     if (env.STRICT_FREE_MODE !== 'false' && m.free_policy !== 'FREE_ONLY') return false;
     if (m.cooloff_until && m.cooloff_until > nowStr) return false;
+    
+    // Canary Logic
+    if (m.is_canary) {
+      const hash = Array.from(threadId || '').reduce((a, b) => a + b.charCodeAt(0), 0);
+      if (hash % 100 >= (m.canary_percentage || 0)) return false;
+    }
+    
     return true;
   });
 
