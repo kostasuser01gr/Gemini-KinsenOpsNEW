@@ -151,7 +151,7 @@ export async function routeChat(env: Env, workspaceId: string, messages: any[], 
       
       await env.DB.prepare(`UPDATE models SET health_status = 'healthy', last_ok_at = ?, last_error = NULL WHERE id = ?`).bind(nowStr, model.id).run();
       
-      ctx?.waitUntil?.(logModelKPI(env, { workspaceId, threadId, preferred: preferredModelId, used: model.id, provider: model.provider_kind, success: true, latency, fallbacks: fallbacks.length }));
+      await logModelKPI(env, { workspaceId, threadId, preferred: preferredModelId, used: model.id, provider: model.provider_kind, success: true, latency, fallbacks: fallbacks.length });
       
       return { content, model_id: model.model_id, provider: model.provider_kind, fallbacks };
     } catch (e: any) {
@@ -159,12 +159,9 @@ export async function routeChat(env: Env, workspaceId: string, messages: any[], 
       const cooloff = new Date(Date.now() + 10 * 60 * 1000).toISOString();
       await env.DB.prepare(`UPDATE models SET health_status = 'unhealthy', cooloff_until = ?, last_error = ? WHERE id = ?`).bind(cooloff, e.message, model.id).run();
       
-      ctx?.waitUntil?.(logModelKPI(env, { workspaceId, threadId, preferred: preferredModelId, used: model.id, provider: model.provider_kind, success: false, latency: Date.now() - start, error: e.message, fallbacks: fallbacks.length }));
+      await logModelKPI(env, { workspaceId, threadId, preferred: preferredModelId, used: model.id, provider: model.provider_kind, success: false, latency: Date.now() - start, error: e.message, fallbacks: fallbacks.length });
     }
   }
 
   return { content: '', model_id: 'NONE', provider: 'DISABLED', fallbacks };
 }
-
-let ctx: ExecutionContext;
-export function setRouterContext(c: ExecutionContext) { ctx = c; }

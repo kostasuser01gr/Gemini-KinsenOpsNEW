@@ -1,19 +1,15 @@
-# Operations & Limits (v6)
+# OPS.md
 
-## Cloudflare Free Tier Optimization
+## Limits
+- **Workers**: 100k req/day free. 10ms CPU limit.
+- **D1**: 5M read/100k write/day. 500MB storage.
 
-### Workers (100,000 requests / day)
-- **Token Bucket Limiter**: API-level rate limiting (30 req/min for chat, 5 req/min for auth).
-- **CPU Management**: Minimized heavy parsing; chunked retention processing.
+## Caching Strategy
+- Cache KB results for 60s.
+- Cache thread lists for 30s.
+- Invalidate on write (best effort).
 
-### D1 Database (5M reads, 100k writes / day)
-- **Data Retention**: Old threads (>30 days) are auto-archived into separate tables.
-- **Audit Compaction**: Old audit logs are rolled up into daily summaries (`audit_rollups_daily`) and deleted.
-- **Caching**: 60s cache on KB search and thread listing to reduce read pressure.
-
-### Model KPIs & Failover
-- **Telemetry**: Success/latency tracking for all model calls.
-- **Auto-Switch**: Circuit breaker marks providers as unhealthy on 429/timeout, triggering fallback to next free model.
-
-## Disaster Recovery
-- **JSON Portability**: Full system snapshots (KB, Macros, sanitized Users) can be exported/imported via Admin UI or CLI.
+## Data Retention
+- Old threads archived to `archived_chat_threads` after 30 days.
+- Audit logs rolled up daily to `audit_rollups_daily`.
+- Triggered manually via Admin UI or daily Cron.

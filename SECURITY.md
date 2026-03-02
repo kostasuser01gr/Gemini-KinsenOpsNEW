@@ -1,14 +1,11 @@
-# Security & Governance (v6)
+# SECURITY.md
 
-## Strict Free Mode
-- **Design Constraint**: `STRICT_FREE_MODE=true` ensures no model provider that could trigger billing is ever invoked.
-- **Fail-Closed**: If no verified free models are available, the system falls back to No-AI mode rather than attempting a paid subrequest.
+## Threat Model
+- **Public Signup**: Protected by Turnstile + Token Bucket Rate Limiting.
+- **Model Abuse**: STRICT_FREE_MODE prevents any billing-capable providers from being used.
+- **Data Breaches**: RBAC (Admin/Manager/Agent) limits data visibility. Audit logs trace all actions.
 
-## Authentication & Authorization
-- **Open Signup**: Public registration enabled, defaulting to `agent` role.
-- **Turnstile**: Bot protection integrated into signup/login.
-- **RBAC**: Middleware-enforced permission matrix (deny-by-default).
-
-## Audit Trail
-- **Correlation ID**: Every request tracked with a unique UUID.
-- **Archive Integrity**: Archived logs maintain metadata for regulatory compliance.
+## Safeguards
+- **BillingGuard**: Centralized check ensuring no paid API keys exist in strict mode.
+- **Rate Limiting**: Per-IP and per-email limits on sensitive endpoints.
+- **Passkeys**: Optional WebAuthn support for passwordless security.

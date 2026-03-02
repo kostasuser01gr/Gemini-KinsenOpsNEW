@@ -63,12 +63,3 @@ export const PERMISSIONS: Record<Role, Action[]> = {
 };
 
 // Extension for request type to handle workspace context
-declare module 'itty-router' {
-  interface IRequest {
-    userId?: string;
-    workspaceId?: string;
-    userRole?: Role;
-    correlationId?: string;
-    waitUntil?: (promise: Promise<any>) => void;
-  }
-}
