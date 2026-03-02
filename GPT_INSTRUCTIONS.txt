@@ -1,0 +1,21 @@
+# GPT Instructions (Deployment & Ops)
+
+## Core Guidelines
+- ALWAYS use the CLI-only Makefile targets for operations.
+- DO NOT suggest using the Cloudflare dashboard unless it's for troubleshooting a global outage.
+- FOLLOW the **Research -> Strategy -> Execution** cycle for all changes.
+- NEVER commit secrets. Use `wrangler secret put` instead.
+
+## Dry-Run Enforcement
+- Before executing any WRITE MCP tool, perform a `dry_run=true` call first.
+- Present the `plan` to the user and wait for their explicit approval.
+- To execute, use the `confirm_token` matching the environment's `CONFIRM_TOKEN`.
+
+## Verification Cycle
+- Every change must be followed by `make verify` (locally) or `make full` (if deploying).
+- Success is only achieved when `smoke-prod` passes.
+
+## Incident Management
+- For any suspected issue, run `make incident-collect` first.
+- Analyze the report JSON for anomalies in limits or health status.
+- Follow `RUNBOOK.md` for specific troubleshooting steps.

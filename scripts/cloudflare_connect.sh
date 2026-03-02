@@ -1,38 +1,35 @@
 #!/bin/bash
-# cloudflare_connect.sh - Provision infrastructure via CLI
-
 set -e
 
-PROJECT_NAME="car-rental-copilot"
-DB_NAME="car-rental-db"
+STAGE=${1:-dev}
+echo "Connecting to Cloudflare (STAGE: $STAGE, Non-interactive)..."
 
-echo "=> Ensuring authentication..."
-npx wrangler whoami || npx wrangler login
+# Create D1 database if not exists
+echo "Creating D1 database..."
+npx wrangler d1 create ops-db || echo "Database might already exist"
 
-echo "=> Checking D1 Database..."
-# We try to create it, if it already exists it will fail but we'll extract the ID from the list if so
-D1_CREATE_OUT=$(npx wrangler d1 create $DB_NAME 2>&1 || true)
-DB_ID=$(echo "$D1_CREATE_OUT" | grep "database_id" | awk -F'"' '{print $4}')
+# Create KV Namespace for sessions
+echo "Creating KV SESSIONS..."
+npx wrangler kv:namespace create SESSIONS || echo "KV namespace might already exist"
 
-if [ -z "$DB_ID" ]; then
-    echo "=> Database might already exist, fetching ID..."
-    DB_ID=$(npx wrangler d1 list --format json | jq -r ".[] | select(.name == \"$DB_NAME\") | .uuid")
-fi
+# Create R2 Bucket for backups
+echo "Creating R2 BACKUPS..."
+npx wrangler r2 bucket create ops-backups || echo "R2 bucket might already exist"
 
-if [ -n "$DB_ID" ]; then
-    echo "=> Updating wrangler.toml with DB ID: $DB_ID"
-    sed -i '' "s/database_id = \".*\"/database_id = \"$DB_ID\"/g" apps/worker/wrangler.toml
-else
-    echo "❌ ERROR: Could not find or create D1 database '$DB_NAME'."
-    exit 1
-fi
+# Create Pages project if not exists
+echo "Creating Pages project..."
+npx wrangler pages project create ops-frontend --production-branch main || echo "Pages project might already exist"
 
-echo "=> Applying Migrations..."
-cd apps/worker
-npx wrangler d1 migrations apply $DB_NAME --remote
-cd ../..
+# Put secrets (from ENV vars)
+echo "Configuring secrets..."
+REQUIRED_SECRETS=("SESSION_SECRET" "TURNSTILE_SECRET_KEY" "MCP_API_KEY" "CONFIRM_TOKEN")
+for secret in "${REQUIRED_SECRETS[@]}"; do
+  if [ ! -z "${!secret}" ]; then
+    echo "Setting $secret..."
+    npx wrangler secret put "$secret" <<< "${!secret}"
+  else
+    echo "Warning: $secret not set in env, skipping."
+  fi
+done
 
-echo "=> Ensuring Pages Project..."
-npx wrangler pages project create $PROJECT_NAME --production-branch main || echo "=> Pages project already exists."
-
-echo "=> Deployment Environment Connected."
+echo "Setup complete for $STAGE."

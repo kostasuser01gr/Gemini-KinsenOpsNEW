@@ -3,7 +3,47 @@
 @tailwind utilities;
 
 @layer base {
-  body {
-    @apply bg-gray-50 text-gray-900;
+  html, body, #root {
+    height: 100%;
+    @apply bg-[#08080f] text-slate-200;
   }
+
+  /* Custom Scrollbar for God-Tier UX */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 5px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-white/5 rounded-full hover:bg-white/10 transition-colors;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-white/[0.03] border border-white/[0.06] backdrop-blur-xl;
+  }
+  
+  .premium-button {
+    @apply flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-xl transition-all shadow-lg active:scale-95 disabled:opacity-50 disabled:grayscale;
+  }
+}
+
+/* Animations from Premium Platform */
+@keyframes scale-in-center {
+  0% { transform: scale(0.95); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.scale-in-center {
+  animation: scale-in-center 0.2s cubic-bezier(0.250, 0.460, 0.450, 0.940) both;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }

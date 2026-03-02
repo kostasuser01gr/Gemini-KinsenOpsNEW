@@ -7,11 +7,12 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
       manifest: {
-        name: 'Ops Copilot',
-        short_name: 'OpsCopilot',
-        description: 'Internal Car Rental Knowledge Base & SOP Support',
-        theme_color: '#2563eb',
+        name: 'Ops Assistant',
+        short_name: 'OpsBot',
+        description: 'ChatGPT-grade ops assistant for Cloudflare',
+        theme_color: '#0ea5e9',
         icons: [
           {
             src: 'pwa-192x192.png',
@@ -26,5 +27,13 @@ export default defineConfig({
         ]
       }
     })
-  ]
+  ],
+  build: {
+    outDir: 'dist',
+  },
+  server: {
+    proxy: {
+      '/api': 'http://localhost:8787'
+    }
+  }
 })

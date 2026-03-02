@@ -2,47 +2,25 @@ name: CD
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
 
 jobs:
-  deploy:
+  full-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 18
-          
-      - name: Install Dependencies
-        run: npm install && cd apps/worker && npm install && cd ../web && npm install
-
-      - name: Apply Migrations
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: d1 migrations apply car-rental-db --remote
-
-      - name: Deploy Worker
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy --cwd apps/worker
-
-      - name: Build Pages
-        run: cd apps/web && npm run build
-        
-      - name: Deploy Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy apps/web/dist --project-name car-rental-copilot --commit-dirty=true
-
-      - name: Smoke Test
-        run: |
-          chmod +x scripts/smoke.sh
-          ./scripts/smoke.sh "https://car-rental-api.dataos-api.workers.dev"
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Run Full Deploy (Make)
+        run: make full
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+          MCP_API_KEY: ${{ secrets.MCP_API_KEY }}
+          CONFIRM_TOKEN: ${{ secrets.CONFIRM_TOKEN }}
+          STRICT_FREE_MODE: "true"

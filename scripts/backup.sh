@@ -1,24 +1,29 @@
 #!/bin/bash
-# backup.sh - Call export and store artifact with checksum
+set -e
 
-TOKEN=$1
-if [ -z "$TOKEN" ]; then
-    echo "Usage: ./backup.sh <SESSION_TOKEN>"
-    exit 1
+# Usage: bash backup.sh <BASE_URL> <ADMIN_TOKEN>
+BASE_URL=$1
+ADMIN_TOKEN=$2
+
+if [ -z "$BASE_URL" ] || [ -z "$ADMIN_TOKEN" ]; then
+  echo "Usage: backup.sh <BASE_URL> <ADMIN_TOKEN>"
+  exit 1
 fi
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-OUT="backups/ops_backup_$TIMESTAMP.json"
+BACKUP_DIR="backups"
+mkdir -p "$BACKUP_DIR"
+OUT_FILE="$BACKUP_DIR/backup_$TIMESTAMP.json"
 
-mkdir -p backups
-./scripts/export_workspace.sh "https://car-rental-api.dataos-api.workers.dev" "$TOKEN"
-mv export.json "$OUT"
+echo "Exporting data from $BASE_URL..."
+curl -s -f -H "Cookie: session=$ADMIN_TOKEN" "$BASE_URL/api/admin/export" > "$OUT_FILE"
 
-# Generate checksum
-sha256sum "$OUT" > "$OUT.sha256"
+echo "Compressing and hashing..."
+gzip "$OUT_FILE"
+GZ_FILE="$OUT_FILE.gz"
+sha256sum "$GZ_FILE" > "$GZ_FILE.sha256"
 
-echo "✅ Backup created: $OUT"
-echo "✅ Checksum generated: $OUT.sha256"
+# Rotate (keep last 7)
+ls -dt $BACKUP_DIR/*.gz | tail -n +8 | xargs rm -f || true
 
-# Cleanup old backups (keep last 5)
-ls -t backups/*.json | tail -n +6 | xargs rm -f -- 2>/dev/null || true
+echo "Backup complete: $GZ_FILE"

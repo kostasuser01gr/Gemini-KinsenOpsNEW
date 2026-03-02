@@ -1,27 +1,34 @@
 #!/bin/bash
-# restore.sh - Import JSON bundle with dry-run support
+set -e
 
-API_URL=$1
-TOKEN=$2
+# Usage: bash restore.sh <BASE_URL> <ADMIN_TOKEN> <FILE> [APPLY=1]
+BASE_URL=$1
+ADMIN_TOKEN=$2
 FILE=$3
-DRY_RUN=${4:-0}
+APPLY=$4
 
-if [ -z "$API_URL" ] || [ -z "$TOKEN" ] || [ -z "$FILE" ]; then
-    echo "Usage: ./restore.sh <API_URL> <SESSION_TOKEN> <JSON_FILE> [DRY_RUN=1|0]"
-    exit 1
+if [ -z "$FILE" ]; then
+  echo "Usage: restore.sh <BASE_URL> <ADMIN_TOKEN> <FILE> [APPLY=1]"
+  exit 1
 fi
 
-if [ "$DRY_RUN" == "1" ]; then
-    echo "=> DRY RUN: Validating schema for $FILE..."
-    # Basic validation: check if it's valid JSON and has expected keys
-    if ! jq -e '.kb and .users' "$FILE" > /dev/null; then
-        echo "❌ Validation failed: Missing required keys (kb, users)."
-        exit 1
-    fi
-    echo "✅ Schema valid. Ready for restore."
-    exit 0
+echo "Verifying checksum for $FILE..."
+sha256sum -c "$FILE.sha256"
+
+echo "Extracting backup..."
+zcat "$FILE" > tmp_restore.json
+
+if [ "$APPLY" == "1" ]; then
+  echo "APPLY=1: Restoring to $BASE_URL..."
+  curl -s -f -X POST "$BASE_URL/api/admin/import" \
+    -H "Cookie: session=$ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d @tmp_restore.json
+  echo "Restore complete."
+else
+  echo "DRY RUN (APPLY=0): Use APPLY=1 to actually import."
+  echo "File content summary:"
+  jq '. | {users: (.users | length), kb_documents: (.kb_documents | length)}' tmp_restore.json
 fi
 
-echo "=> Restoring data from $FILE to $API_URL..."
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d @"$FILE" "$API_URL/api/admin/import"
-echo "✅ Restore completed."
+rm tmp_restore.json

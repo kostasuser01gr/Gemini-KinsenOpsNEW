@@ -1,36 +1,32 @@
-# Car Rental Ops Copilot (V11 Ultimate)
+# Ops Assistant (Cloudflare-Only)
 
-## Enterprise-Grade CLI-Driven Ops Platform
-Deployed entirely on Cloudflare Pages, Workers, and D1.
+CLI-ONLY Deployment and Operations Workflow.
 
-### 🔐 High-Security Features
-- **App PIN Lock**: 4-digit device-local unlock using PBKDF2/SHA-256 (no PIN sent to server).
-- **E2EE Password Vault**: End-to-End Encrypted credentials storage. AES-GCM encryption performed client-side with DEK/KEK derivation. Server sees only ciphertext.
-- **Trusted Device Management**: Track and revoke device access remotely.
-- **Never-Bill-By-Design**: Strict compliance guard blocking paid AI configurations.
+## Prerequisites
+- Cloudflare Account
+- `CLOUDFLARE_API_TOKEN` (Required: D1, Workers, Pages permissions)
+- `CLOUDFLARE_ACCOUNT_ID`
 
-### 🚀 Deployment (CLI-Only)
+## Quick Start (0-to-prod)
+1. Configure `.env` with Cloudflare credentials and required secrets.
+2. Run `make setup` to initialize.
+3. Run `make full` to deploy.
 
-```bash
-# 1. Provision Infrastructure
-./scripts/cloudflare_connect.sh
+## Core Makefile Targets
+- `make setup`: Idempotent environment setup.
+- `make verify`: Comprehensive local verification.
+- `make full`: Full deployment pipeline (Deploy-check -> Verify -> Migrate -> Deploy).
+- `make backup`: Create a compressed backup from production.
+- `make restore FILE=... APPLY=1`: Restore from a backup file.
+- `make incident-collect`: Collect a system-wide ops report.
 
-# 2. Set Mandatory Secrets
-wrangler secret put SESSION_SECRET --name car-rental-api
-wrangler secret put TURNSTILE_SECRET_KEY --name car-rental-api
+## Directory Structure
+- `apps/web`: React Frontend (Vite, Cloudflare Pages).
+- `apps/worker`: Hono/Itty-router Backend (Cloudflare Workers, D1).
+- `scripts/`: Operational scripts (Smoke, Backup, Restore, Connect, Rollback).
+- `migrations/`: D1 SQL migrations.
 
-# 3. Full Verification and Deploy
-make full
-```
-
-### 🛠️ Operator CLI Pack
-- **Check Status**: `./scripts/cloudflare_status.sh`
-- **Verify Vault API**: `make vault-smoke TOKEN=<TOKEN>`
-- **Export Workspace**: `./scripts/export_workspace.sh <URL> <TOKEN>`
-- **Run Doctor**: `make doctor`
-
-## Architecture Highlights
-- **Backend**: itty-router + D1 + WebCrypto.
-- **Frontend**: React + Tailwind + lucide-react + react-markdown.
-- **Offline**: PWA + IndexedDB cache for threads and KB snippets.
-- **Analytics**: Model KPIs (latency, success rate, fallback frequency).
+## Security
+- Secrets are managed via `wrangler secret put` and are NOT stored in the repo.
+- Turnstile is required for signup/login (Dummy keys supported in tests).
+- MCP requires Bearer Authentication and Origin validation.

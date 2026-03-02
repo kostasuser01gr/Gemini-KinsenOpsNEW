@@ -1,89 +1,69 @@
-# Ops Copilot V11 Makefile
-# Complete CLI-Ops Workflow
+# God-Tier Master Ultra - RentalMaster Platform
 
-.PHONY: setup lint fmt typecheck test e2e audit build migrate deploy-worker deploy-pages smoke-local smoke-prod verify full doctor repair clean quota-status backup restore release rollback retry-ops vault-smoke
+.PHONY: setup lint fmt typecheck test e2e audit build migrate migrate-safe deploy deploy-atomic smoke-prod logs backup-r2 backup-local restore deploy-check verify full provision workspace-create workspace-destroy canary dashboard nebula jail-list jail-release metrics status-gen aegis-verify
+
+STRICT_FREE_MODE ?= true
+STAGE ?= dev
+WORKER_URL ?= https://ops-api.dataos-api.workers.dev
+ADMIN_TOKEN ?= ""
 
 setup:
-	@chmod +x scripts/*.sh
-	@./scripts/bootstrap_repo.sh
+	npm install
+	bash scripts/cloudflare_connect.sh $(STAGE)
+
+provision:
+	bash scripts/cloudflare_connect.sh $(STAGE)
+	npx wrangler kv:namespace create JAIL || true
+	npx wrangler d1 migrations apply ops-db --remote -c apps/worker/wrangler.toml || true
+
+deploy-atomic:
+	bash scripts/deploy_atomic.sh $(WORKER_URL)
+
+nebula:
+	bash scripts/nebula.sh $(WORKER_URL) $(ADMIN_TOKEN)
+
+aegis-verify:
+	npx wrangler d1 execute ops-db --remote --command "SELECT id, action, entry_hash FROM forensic_chain ORDER BY id ASC" -c apps/worker/wrangler.toml
+
+jail-list:
+	bash scripts/jail_manage.sh list
+
+jail-release:
+	bash scripts/jail_manage.sh release $(IP)
+
+metrics:
+	npx wrangler analytics-engine query "SELECT * FROM METRICS ORDER BY timestamp DESC LIMIT 10"
+
+status-gen:
+	curl -s -H "Cookie: session=$(ADMIN_TOKEN)" $(WORKER_URL)/api/admin/report > status_report.json
+	echo "System Status: $$(jq -r .status status_report.json)" > status.html
+	echo "Users: $$(jq -r .user_count status_report.json)" >> status.html
 
 lint:
-	cd apps/web && npx eslint src --max-warnings 0 || true
-	cd apps/worker && npx eslint src --max-warnings 0 || true
+	npm run lint -w apps/worker
+	npm run lint -w apps/web
 
 fmt:
-	cd apps/web && npx prettier --check "src/**/*.{ts,tsx,css}" || true
-	cd apps/worker && npx prettier --check "src/**/*.ts" || true
+	npm run fmt -w apps/worker
+	npm run fmt -w apps/web
 
 typecheck:
-	cd apps/web && npx tsc --noEmit
-	cd apps/worker && npx tsc --noEmit
+	npm run typecheck -w apps/worker
+	npm run typecheck -w apps/web
 
 test:
-	cd apps/worker && npm run test
-
-e2e:
-	@echo "=> Running Playwright E2E Tests..."
-	# npx playwright test
-
-audit:
-	@echo "=> Running Security Scans..."
-	cd apps/web && npm audit --audit-level=high
-	cd apps/worker && npm audit --audit-level=high
-	@echo "=> Checking for secrets..."
-	@grep -rE "AI_KEY|SECRET|TOKEN" apps/worker/src --exclude="*.test.ts" | grep -v "env." || echo "✅ No obvious hardcoded secrets."
+	npm run test -w apps/worker
+	npm run test -w apps/web
 
 build:
-	cd apps/web && npm run build
+	npm run build -w apps/worker
+	npm run build -w apps/web
 
-migrate:
-	cd apps/worker && npx wrangler d1 migrations apply car-rental-db --remote
+migrate-safe:
+	bash scripts/migrate_safe.sh $(WORKER_URL) $(ADMIN_TOKEN)
 
-deploy-worker:
+deploy:
 	cd apps/worker && npx wrangler deploy
+	cd apps/web && npx wrangler pages deploy dist --project-name=ops-frontend
 
-deploy-pages:
-	cd apps/web && npx wrangler pages deploy dist --project-name car-rental-copilot --commit-dirty=true
-
-smoke-local:
-	@echo "=> Running local smoke tests..."
-	@./scripts/smoke.sh "http://localhost:8787" || true
-
-smoke-prod:
-	@echo "=> Running production smoke tests..."
-	@./scripts/smoke.sh "https://car-rental-api.dataos-api.workers.dev"
-
-verify: lint typecheck test audit
-	@echo "=> Verification Passed."
-
-full: verify build migrate deploy-worker deploy-pages smoke-prod
-	@echo "=> FULL DEPLOYMENT COMPLETE AND GREEN."
-
-doctor:
-	@./scripts/doctor.sh
-
-repair:
-	@./scripts/repair.sh
-
-# V9 Operator Pack
-quota-status:
-	@./scripts/quota_status.sh $(TOKEN)
-
-backup:
-	@./scripts/backup.sh $(TOKEN)
-
-restore:
-	@./scripts/restore.sh https://car-rental-api.dataos-api.workers.dev $(TOKEN) $(FILE) $(DRY_RUN)
-
-release:
-	@./scripts/release.sh $(VERSION)
-
-rollback:
-	@./scripts/rollback.sh $(VERSION) $(PAGES_ID)
-
-retry-ops:
-	@./scripts/retry_failed_ops.sh
-
-# V11 Vault Smoke
-vault-smoke:
-	@./scripts/vault_smoke.sh $(TOKEN)
+full: deploy-check verify migrate-safe deploy-atomic smoke-prod

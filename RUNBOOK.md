@@ -1,39 +1,28 @@
 # Ops Runbook
 
-## 1. Secrets Management
-To rotate or update secrets:
-```bash
-wrangler secret put SESSION_SECRET --name car-rental-api
-wrangler secret put TURNSTILE_SECRET_KEY --name car-rental-api
-```
+## Rotate Secrets
+1. Set the new secret value in your environment.
+2. Run `make setup` (it will use `wrangler secret put` for all configured secrets).
+3. If only rotating one secret: `npx wrangler secret put SECRET_NAME <<< "NEW_VALUE"`.
 
-## 2. Database Recovery
-If you need to restore a workspace from a JSON snapshot:
-```bash
-./scripts/restore.sh https://car-rental-api.dataos-api.workers.dev <TOKEN> backup.json
-```
+## Retention Run (via MCP)
+1. Use a tool like `retention.run_now`.
+2. First call with `dry_run: true` to see the plan.
+3. Second call with `dry_run: false` and the matching `CONFIRM_TOKEN`.
 
-To rerun migrations:
-```bash
-make migrate
-```
+## Backup & Restore
+- **Backup**: `make backup` (Creates `backups/backup_TIMESTAMP.json.gz`).
+- **Restore**:
+  1. `make restore FILE=backups/backup_TIMESTAMP.json.gz` (Dry-run).
+  2. Review the summary.
+  3. `make restore FILE=backups/backup_TIMESTAMP.json.gz APPLY=1` (Execute).
 
-## 3. Deployment Rollback
-Workers:
-```bash
-wrangler deployments list
-wrangler rollback <VERSION_ID>
-```
+## Rollback
+1. Identify the stable git tag.
+2. Run `bash scripts/rollback.sh <GIT_TAG>`.
+3. Verify production with `make smoke-prod`.
 
-Pages:
-```bash
-wrangler pages deployment list --project-name car-rental-copilot
-# Rollback is usually done by pushing a previous known-good git SHA
-```
-
-## 4. Retention Management
-To manually trigger archiving:
-```bash
-# Admin only
-curl -X POST -H "Authorization: Bearer <TOKEN>" https://car-rental-api.dataos-api.workers.dev/api/admin/retention/run
-```
+## Incident Collection
+1. Run `make incident-collect`.
+2. Share the generated JSON report with the team.
+3. Check Cloudflare Dashboard only if D1 or Workers show global outages.

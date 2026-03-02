@@ -1,12 +1,28 @@
-name = "car-rental-api"
+name = "ops-api"
 main = "src/index.ts"
-compatibility_date = "2025-01-01"
+compatibility_date = "2023-12-01"
 
-[ai]
-binding = "AI"
+[vars]
+STRICT_FREE_MODE = "true"
+ADMIN_ALLOWLIST_EMAILS = "admin@example.com"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "car-rental-db"
-database_id = "e0153d18-0440-4bc0-ba9c-581419dee1b3"
+database_name = "ops-db"
+database_id = "c76a5a17-6131-453a-bb25-a4ebab4c7f12"
 migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "77f25bf1903e4aee826f7b28aef76de7"
+
+[[kv_namespaces]]
+binding = "JAIL"
+id = "22db71e8185b4754a799c02d2d016da2"
+
+# [[analytics_engine_datasets]]
+# binding = "METRICS"
+# dataset = "OPS_METRICS"
+
+[observability]
+enabled = true
