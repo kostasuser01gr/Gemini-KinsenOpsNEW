@@ -1,0 +1,5 @@
+# Core platform ownership
+/apps/worker/ @kostasuser01gr
+/apps/web/ @kostasuser01gr
+/scripts/ @kostasuser01gr
+/.github/workflows/ @kostasuser01gr

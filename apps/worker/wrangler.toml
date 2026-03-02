@@ -5,6 +5,7 @@ compatibility_date = "2023-12-01"
 [vars]
 STRICT_FREE_MODE = "true"
 ADMIN_ALLOWLIST_EMAILS = "admin@example.com"
+CORS_ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 
 [[d1_databases]]
 binding = "DB"
@@ -19,6 +20,19 @@ id = "77f25bf1903e4aee826f7b28aef76de7"
 [[kv_namespaces]]
 binding = "JAIL"
 id = "22db71e8185b4754a799c02d2d016da2"
+
+[[r2_buckets]]
+binding = "BACKUPS"
+bucket_name = "ops-backups"
+preview_bucket_name = "ops-backups"
+
+[[durable_objects.bindings]]
+name = "THREAD_ROOM"
+class_name = "ThreadRoom"
+
+[[migrations]]
+tag = "v1-thread-room"
+new_classes = ["ThreadRoom"]
 
 # [[analytics_engine_datasets]]
 # binding = "METRICS"

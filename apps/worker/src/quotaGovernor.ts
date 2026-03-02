@@ -13,13 +13,19 @@ export interface QuotaStatus {
 export class QuotaGovernor {
   static async getStatus(env: Env, workspaceId: string): Promise<QuotaStatus> {
     const today = new Date().toISOString().split('T')[0];
-    const config = await env.DB.prepare('SELECT mode FROM quota_config WHERE workspace_id = ?').bind(workspaceId).first<{ mode: string }>();
-    const modelCallsRes = await env.DB.prepare('SELECT SUM(model_calls) as total FROM daily_usage_stats WHERE day = ? AND workspace_id = ?').bind(today, workspaceId).first<{ total: number }>();
-    const d1WritesRes = await env.DB.prepare('SELECT COUNT(*) as total FROM audit_logs WHERE date(created_at) = ? AND workspace_id = ?').bind(today, workspaceId).first<{ total: number }>();
+    const config = await env.DB.prepare('SELECT mode FROM quota_config WHERE workspace_id = ?')
+      .bind(workspaceId)
+      .first<{ mode: QuotaStatus['mode'] }>();
+    const modelCallsRes = await env.DB.prepare('SELECT SUM(model_calls) as total FROM daily_usage_stats WHERE day = ? AND workspace_id = ?')
+      .bind(today, workspaceId)
+      .first<{ total: number }>();
+    const d1WritesRes = await env.DB.prepare('SELECT COUNT(*) as total FROM audit_logs WHERE date(created_at) = ? AND workspace_id = ?')
+      .bind(today, workspaceId)
+      .first<{ total: number }>();
     const modelCallsToday = modelCallsRes?.total || 0;
     const d1WritesToday = d1WritesRes?.total || 0;
-    let mode = (config?.mode as any) || 'normal';
-    let reason = '';
+    let mode: QuotaStatus['mode'] = config?.mode || 'normal';
+    let reason: string | undefined;
     if (mode === 'normal') {
       if (d1WritesToday > 90000) { mode = 'degraded'; reason = 'D1 daily write quota nearing limit.'; }
       if (modelCallsToday > 4000) { mode = 'degraded'; reason = 'High model call volume.'; }

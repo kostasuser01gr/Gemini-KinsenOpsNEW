@@ -12,6 +12,10 @@ CLI-ONLY Deployment and Operations Workflow.
 2. Run `make setup` to initialize.
 3. Run `make full` to deploy.
 
+## Local Quality Gate
+1. `make verify`
+2. Optional pre-push hook setup: `git config core.hooksPath .githooks`
+
 ## Core Makefile Targets
 - `make setup`: Idempotent environment setup.
 - `make verify`: Comprehensive local verification.

@@ -2,11 +2,13 @@ name: CI/CD
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   schedule:
-    - cron: '0 0 * * *' # Nightly verify
+    - cron: "0 0 * * *"
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
 
 jobs:
   verify:
@@ -16,25 +18,44 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: "npm"
 
       - name: Install dependencies
         run: npm install
 
-      - name: Lint
-        run: make lint
+      - name: Verify
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          STRICT_FREE_MODE: "true"
+        run: |
+          mkdir -p .reports
+          make verify | tee .reports/verify.log
 
-      - name: Typecheck
-        run: make typecheck
+      - name: Upload Verify Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verify-reports
+          path: .reports/
+          if-no-files-found: warn
 
-      - name: Audit
-        run: make audit
-
-      - name: Test
-        run: make test
-
-      - name: Build
-        run: make build
+  synthetic-probes:
+    needs: verify
+    if: github.event_name == 'schedule' && github.event.schedule == '0 3 * * 0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - name: Run synthetic probes
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          MCP_API_KEY: ${{ secrets.MCP_API_KEY }}
+        run: make synthetic-probes
 
   deploy:
     needs: verify
@@ -49,25 +70,11 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Migrate Database
-        run: make migrate
+      - name: Deploy with safety gates
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      - name: Deploy Worker
-        run: make deploy-worker
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      - name: Deploy Pages
-        run: make deploy-pages
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      - name: Smoke Test
-        run: make smoke-prod
-        env:
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           MCP_API_KEY: ${{ secrets.MCP_API_KEY }}
+        run: make deploy-safe

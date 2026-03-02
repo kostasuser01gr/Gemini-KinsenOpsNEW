@@ -6,7 +6,7 @@ export async function logAudit(
   action: string,
   entity: string,
   entityId: string | null,
-  metadata: any,
+  metadata: Record<string, unknown>,
   correlationId: string,
   workspaceId: string = 'ws_default_public'
 ) {
@@ -36,12 +36,27 @@ export async function logAudit(
 export async function verifyAuditChain(env: Env, workspaceId: string): Promise<{ ok: boolean; failedId?: string }> {
   // Simple full chain verification for a workspace
   // In production, you'd do this in batches or per day
-  const { results } = await env.DB.prepare('SELECT * FROM audit_logs WHERE workspace_id = ? ORDER BY created_at ASC')
-    .bind(workspaceId).all();
-  
+  interface AuditRow {
+    id: string;
+    workspace_id: string;
+    user_id: string;
+    action: string;
+    entity: string;
+    entity_id: string | null;
+    metadata_json: string;
+    correlation_id: string;
+    prev_hash: string;
+    entry_hash: string;
+  }
+
+  const { results } = await env.DB
+    .prepare('SELECT * FROM audit_logs WHERE workspace_id = ? ORDER BY created_at ASC')
+    .bind(workspaceId)
+    .all<AuditRow>();
+
   let expectedPrevHash = '0'.repeat(64);
-  
-  for (const entry of results as any[]) {
+
+  for (const entry of results) {
     if (entry.prev_hash !== expectedPrevHash) {
       return { ok: false, failedId: entry.id };
     }

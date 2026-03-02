@@ -1,51 +1,61 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-BASE_URL=$1
+BASE_URL=${1:-}
 if [ -z "$BASE_URL" ]; then
   echo "Usage: smoke.sh <BASE_URL>"
   exit 1
 fi
 
-echo "Starting Smoke Test for $BASE_URL"
+echo "Starting smoke test for $BASE_URL"
 
-# 1. Health & Compliance
-echo "Checking /healthz..."
-curl -s -f "$BASE_URL/healthz" | grep -q "ok"
-echo "Checking /readyz..."
-curl -s -f "$BASE_URL/readyz" | grep -q "ready"
-echo "Checking /api/compliance..."
-curl -s -f "$BASE_URL/api/compliance" | grep -q "strict_free"
+echo "Checking /healthz"
+curl -sSf "$BASE_URL/healthz" | jq -e '.ok == true and .data.status == "ok"' >/dev/null
 
-# 2. MCP Metadata
-echo "Checking /mcp (GET)..."
-curl -s -f -H "Authorization: Bearer ${MCP_API_KEY:-test-key}" "$BASE_URL/mcp" | grep -q "mcp_version"
+echo "Checking /readyz"
+curl -sSf "$BASE_URL/readyz" | jq -e '.ok == true' >/dev/null
 
-# 3. Functional Flow: Signup/Login (with Turnstile dummy keys)
-# Note: We'll use a random email to ensure idempotency and avoid "User already exists" errors in tests if DB isn't wiped
-TEST_EMAIL="smoke-$(date +%s)@example.com"
-TEST_PASS="smoke-pass-123"
-DUMMY_TURNSTILE="1x00000000000000000000AA"
+echo "Checking /api/v1/compliance"
+curl -sSf "$BASE_URL/api/v1/compliance" | jq -e '.ok == true and .data.strict_free_mode != null' >/dev/null
 
-echo "Attempting Signup ($TEST_EMAIL)..."
-SIGNUP_RES=$(curl -s -i -X POST "$BASE_URL/api/auth/signup" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"$TEST_EMAIL\", \"password\":\"$TEST_PASS\", \"turnstile_token\":\"$DUMMY_TURNSTILE\"}")
-
-if echo "$SIGNUP_RES" | grep -q "200 OK"; then
-  echo "Signup Success."
+echo "Checking /mcp"
+if [ -n "${MCP_API_KEY:-}" ]; then
+  curl -sSf -H "Authorization: Bearer ${MCP_API_KEY}" "$BASE_URL/mcp" | jq -e '.ok == true and .data.mcp_version != null' >/dev/null
 else
-  echo "Signup Failed."
+  curl -sSf "$BASE_URL/mcp" | jq -e '.ok == true and .data.mcp_version != null' >/dev/null
+fi
+
+echo "Checking chat auth guard"
+CHAT_GUARD=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/v1/chat/message" \
+  -H "Content-Type: application/json" \
+  -d '{"thread_id":"t-1","content":"ping"}')
+if [ "$CHAT_GUARD" -ne 401 ]; then
+  echo "Expected 401 from /api/v1/chat/message without auth, got $CHAT_GUARD"
+  exit 1
+fi
+
+TEST_IDENTIFIER="smoke-$(date +%s)@example.com"
+TEST_PASS="smoke-pass-123"
+
+echo "Attempting signup"
+SIGNUP_RES=$(curl -sS -i -X POST "$BASE_URL/api/v1/auth/signup" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$TEST_IDENTIFIER\",\"password\":\"$TEST_PASS\"}")
+
+echo "$SIGNUP_RES" | grep -q "200 OK"
+SESSION_COOKIE=$(echo "$SIGNUP_RES" | grep "Set-Cookie" | sed 's/Set-Cookie: //;s/;.*//' | tr -d '\r')
+if [ -z "$SESSION_COOKIE" ]; then
+  echo "Missing session cookie from signup response"
   echo "$SIGNUP_RES"
   exit 1
 fi
 
-# Extract session cookie
-SESSION_COOKIE=$(echo "$SIGNUP_RES" | grep "Set-Cookie" | sed 's/Set-Cookie: //;s/;.*//' | tr -d '\r')
+AUTH_HEADER=( -H "Authorization: Bearer ${SESSION_COOKIE#session=}" )
 
-# 4. KB Search
-echo "Attempting KB Search..."
-curl -s -f -b "session=$SESSION_COOKIE" "$BASE_URL/api/kb/search?q=test" > /dev/null
-echo "KB Search Success."
+echo "KB search"
+curl -sSf "${AUTH_HEADER[@]}" "$BASE_URL/api/v1/kb/search?q=test" | jq -e '.ok == true' >/dev/null
 
-echo "Smoke Test Passed. Green."
+echo "SSE pulse"
+curl -s --max-time 8 -f "$BASE_URL/api/v1/sync/pulse" | grep -q "event: pulse"
+
+echo "Smoke test passed"

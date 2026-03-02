@@ -25,8 +25,9 @@ export function checkCompliance(env: Env): ComplianceReport {
   if (strict) {
     // Block billing-capable secrets
     const suspicious = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_AI_KEY', 'PROVIDER_KEY'];
+    const envMap = env as unknown as Record<string, unknown>;
     suspicious.forEach(key => {
-      if ((env as any)[key]) {
+      if (envMap[key]) {
         report.blockedSecrets.push(key);
         report.status = 'non-compliant';
         report.reasons.push(`Suspicious secret found: ${key}. Billing-capable secrets are prohibited in STRICT_FREE_MODE.`);
@@ -41,7 +42,7 @@ export function checkCompliance(env: Env): ComplianceReport {
   return report;
 }
 
-export const billingGuardMiddleware = (req: any, env: Env) => {
+export const billingGuardMiddleware = (_req: Request, env: Env) => {
   const report = checkCompliance(env);
   if (report.status === 'non-compliant' && env.STRICT_FREE_MODE !== 'false') {
     // We don't necessarily block the whole worker, but we could block admin changes or certain calls.

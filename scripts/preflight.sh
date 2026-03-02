@@ -26,12 +26,27 @@ fi
 
 # Wrangler configuration bindings (D1, KV, R2)
 WRANGLER_CONFIG="apps/worker/wrangler.toml"
-BINDINGS=("DB" "SESSIONS" "BACKUPS")
+BINDINGS=("DB" "SESSIONS" "JAIL" "BACKUPS")
 for binding in "${BINDINGS[@]}"; do
   if ! grep -q "binding = \"$binding\"" "$WRANGLER_CONFIG"; then
     echo "Error: Missing $binding binding in $WRANGLER_CONFIG."
     exit 1
   fi
 done
+
+if ! grep -qE '^verify:' Makefile; then
+  echo "Error: Makefile target 'verify' is missing."
+  exit 1
+fi
+
+if [ ! -f ".github/workflows/main.yml" ]; then
+  echo "Error: main workflow missing."
+  exit 1
+fi
+
+if [ ! -d "packages/contracts" ]; then
+  echo "Error: shared contracts package missing."
+  exit 1
+fi
 
 echo "Preflight complete. Full-scale ready."

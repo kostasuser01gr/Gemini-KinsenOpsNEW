@@ -1,0 +1,8 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "[pre-push] worker typecheck"
+npm run typecheck --workspace=apps/worker
+
+echo "[pre-push] worker tests"
+npm run test --workspace=apps/worker
