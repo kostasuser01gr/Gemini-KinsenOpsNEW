@@ -5,5 +5,5 @@ compatibility_date = "2024-03-20"
 [[d1_databases]]
 binding = "DB"
 database_name = "car-rental-db"
-database_id = "your-database-id"
+database_id = "e0153d18-0440-4bc0-ba9c-581419dee1b3"
 migrations_dir = "migrations"

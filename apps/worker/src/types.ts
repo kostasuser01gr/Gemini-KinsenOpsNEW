@@ -13,6 +13,7 @@ export interface Env {
   CF_ACCESS_JWKS_URL?: string;
   CF_ACCESS_AUD?: string;
   ADMIN_ALLOWLIST_EMAILS?: string;
+  HF_TOKEN?: string;
 }
 
 export type Action = 

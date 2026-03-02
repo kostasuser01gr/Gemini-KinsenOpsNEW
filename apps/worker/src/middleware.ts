@@ -1,10 +1,17 @@
 import { IRequest, error } from 'itty-router';
 import { Env, Action, Role } from './types';
 import { hasPermission } from './rbac';
+import { checkRateLimit } from './modelRouter';
 import * as jose from 'jose';
 
 export const withCorrelationId = (req: IRequest) => {
   req.correlationId = req.headers.get('x-correlation-id') || ('req_' + Date.now() + Math.random().toString(36).substring(2));
+};
+
+export const withRateLimit = (req: IRequest) => {
+  if (req.userId && !checkRateLimit(req.userId)) {
+    return error(429, 'Rate limit exceeded');
+  }
 };
 
 export const withAuth = async (req: IRequest, env: Env) => {

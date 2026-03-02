@@ -1,16 +1,17 @@
-import { IRequest, Router, error, json, createCors } from 'itty-router';
+import { IRequest, Router, error, json, cors } from 'itty-router';
 import { Env, Action } from './types';
-import { withAuth, withCorrelationId, requirePermission } from './middleware';
+import { withAuth, withCorrelationId, requirePermission, withRateLimit } from './middleware';
 import { logAudit } from './audit';
 import { calculateQuote, QuoteRequest, PricingRule } from './pricing';
 import { canTransition } from './bookings';
 import { rollupKpis } from './kpi';
 import { getCached } from './cache';
+import { callModelWithFallback, verifyLicense, isJailbreak } from './modelRouter';
 
-const { preflight, corsify } = createCors({
+const { preflight, corsify } = cors({
   origins: ['*'],
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  headers: ['*'] // To allow cf-access-jwt-assertion
+  headers: ['*']
 });
 
 const router = Router<IRequest, [Env, ExecutionContext]>();
@@ -49,7 +50,7 @@ router.get('/api/fleet/search', withAuth, requirePermission('fleet:read'), async
   });
 });
 
-// --- PRICING ENGINE (Deterministic Quote) ---
+// --- PRICING ENGINE ---
 router.post('/api/quote', withAuth, requirePermission('bookings:read'), async (req, env: Env) => {
   const quoteReq = await req.json() as QuoteRequest;
   const { results } = await env.DB.prepare('SELECT * FROM pricing_rules WHERE active = 1 ORDER BY priority DESC').all();
@@ -57,7 +58,7 @@ router.post('/api/quote', withAuth, requirePermission('bookings:read'), async (r
   return json(quote);
 });
 
-// --- BOOKINGS (State Machine) ---
+// --- BOOKINGS ---
 router.post('/api/bookings', withAuth, requirePermission('bookings:write'), async (req, env: Env) => {
   const data = await req.json() as any;
   const id = 'bk_' + Date.now();
@@ -80,27 +81,18 @@ router.patch('/api/bookings/:id/status', withAuth, requirePermission('bookings:w
   
   const booking = await env.DB.prepare('SELECT status, vehicle_id, start_at FROM bookings WHERE id = ?').bind(id).first();
   if (!booking) return error(404, 'Booking not found');
-  
-  if (!canTransition(booking.status as string, status)) {
-    return error(400, `Invalid transition from ${booking.status} to ${status}`);
-  }
+  if (!canTransition(booking.status as string, status)) return error(400, `Invalid transition`);
   
   await env.DB.prepare('UPDATE bookings SET status = ? WHERE id = ?').bind(status, id).run();
-  
   await env.DB.prepare(`INSERT INTO booking_events (id, booking_id, event_type, payload_json) VALUES (?, ?, ?, ?)`)
     .bind('ev_' + Date.now(), id, 'status_changed', JSON.stringify({ from: booking.status, to: status })).run();
     
-  if (status === 'picked_up') {
-    await env.DB.prepare("UPDATE vehicles SET status = 'rented' WHERE id = ?").bind(booking.vehicle_id).run();
-  } else if (status === 'returned' || status === 'cancelled') {
-    await env.DB.prepare("UPDATE vehicles SET status = 'available' WHERE id = ?").bind(booking.vehicle_id).run();
-  }
+  if (status === 'picked_up') await env.DB.prepare("UPDATE vehicles SET status = 'rented' WHERE id = ?").bind(booking.vehicle_id).run();
+  else if (status === 'returned' || status === 'cancelled') await env.DB.prepare("UPDATE vehicles SET status = 'available' WHERE id = ?").bind(booking.vehicle_id).run();
   
   const dateStr = (booking.start_at as string).split('T')[0];
   const vehicle = await env.DB.prepare('SELECT location_id FROM vehicles WHERE id = ?').bind(booking.vehicle_id).first();
-  if (vehicle) {
-    req.waitUntil?.(rollupKpis(env, dateStr, vehicle.location_id as string));
-  }
+  if (vehicle) req.waitUntil?.(rollupKpis(env, dateStr, vehicle.location_id as string));
   
   await logAudit(env, req.userId, 'update_status', 'booking', id, { from: booking.status, to: status }, req.correlationId);
   return json({ success: true });
@@ -110,7 +102,6 @@ router.get('/api/bookings/:id', withAuth, requirePermission('bookings:read'), as
   const { id } = req.params;
   const booking = await env.DB.prepare('SELECT * FROM bookings WHERE id = ?').bind(id).first();
   if (!booking) return error(404);
-  
   await logAudit(env, req.userId, 'read_sensitive', 'booking', id, { fields: ['customer_phone'] }, req.correlationId);
   return json(booking);
 });
@@ -120,13 +111,10 @@ router.get('/api/admin/audit', withAuth, requirePermission('audit:read'), async 
   const { results } = await env.DB.prepare('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 100').all();
   return json(results);
 });
-
 router.get('/api/admin/audit/export.csv', withAuth, requirePermission('audit:read'), async (req, env: Env) => {
   const { results } = await env.DB.prepare('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 1000').all();
   let csv = 'id,user_id,action,entity,entity_id,correlation_id,created_at\n';
-  results.forEach((r: any) => {
-    csv += `${r.id},${r.user_id},${r.action},${r.entity},${r.entity_id},${r.correlation_id},${r.created_at}\n`;
-  });
+  results.forEach((r: any) => { csv += `${r.id},${r.user_id},${r.action},${r.entity},${r.entity_id},${r.correlation_id},${r.created_at}\n`; });
   return new Response(csv, { headers: { 'Content-Type': 'text/csv' } });
 });
 
@@ -134,11 +122,8 @@ router.post('/api/admin/kpis/recompute', withAuth, requirePermission('kpis:write
   const url = new URL(req.url);
   const date = url.searchParams.get('date');
   if (!date) return error(400, 'date required');
-  
   const { results } = await env.DB.prepare('SELECT id FROM locations').all();
-  for (const loc of results) {
-    await rollupKpis(env, date, loc.id as string);
-  }
+  for (const loc of results) await rollupKpis(env, date, loc.id as string);
   await logAudit(env, req.userId, 'recompute', 'kpis', null, { date }, req.correlationId);
   return json({ success: true });
 });
@@ -147,7 +132,6 @@ router.get('/api/admin/macros', withAuth, requirePermission('macros:read'), asyn
   const { results } = await env.DB.prepare('SELECT * FROM macros').all();
   return json(results);
 });
-
 router.post('/api/admin/macros', withAuth, requirePermission('macros:write'), async (req, env: Env) => {
   const data = await req.json() as any;
   const id = 'mac_' + Date.now();
@@ -157,18 +141,75 @@ router.post('/api/admin/macros', withAuth, requirePermission('macros:write'), as
   return json({ id });
 });
 
-// --- CHAT ENGINE (Mode A) ---
-router.post('/api/chat/messages', withAuth, async (req, env: Env) => {
+// MODEL REGISTRY CRUD
+router.get('/api/admin/models', withAuth, requirePermission('models:read'), async (req, env: Env) => {
+  const { results } = await env.DB.prepare('SELECT * FROM models ORDER BY priority DESC').all();
+  return json(results);
+});
+
+router.post('/api/admin/models', withAuth, requirePermission('models:write'), async (req, env: Env) => {
+  const data = await req.json() as any;
+  
+  if (isJailbreak(data.model_id) || isJailbreak(data.display_name)) {
+    return error(400, 'Model name is in the blocked list. Jailbreak/NSFW models are strictly prohibited.');
+  }
+
+  let license = data.license || 'unknown';
+  if (data.provider_kind === 'hf_routed_free') {
+    try {
+      license = await verifyLicense(data.model_id);
+    } catch (e: any) {
+      return error(400, `License verification failed: ${e.message}`);
+    }
+  }
+
+  const id = 'mod_' + Date.now();
+  await env.DB.prepare(`
+    INSERT INTO models (id, display_name, provider_kind, model_id, base_url, api_key_secret_name, license, free_policy, priority, enabled)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(id, data.display_name, data.provider_kind, data.model_id, data.base_url || null, data.api_key_secret_name || null, license, 'FREE_ONLY', data.priority || 0, data.enabled ? 1 : 0).run();
+  
+  await logAudit(env, req.userId, 'create', 'model', id, { model_id: data.model_id, license }, req.correlationId);
+  return json({ id, license });
+});
+
+router.delete('/api/admin/models/:id', withAuth, requirePermission('models:write'), async (req, env: Env) => {
+  const { id } = req.params;
+  await env.DB.prepare('DELETE FROM models WHERE id = ?').bind(id).run();
+  await logAudit(env, req.userId, 'delete', 'model', id, {}, req.correlationId);
+  return json({ success: true });
+});
+
+// --- CHAT ENGINE (With Rate Limit & FREE-Only Router) ---
+router.get('/api/chat/threads', withAuth, async (req, env: Env) => {
+  const { results } = await env.DB.prepare('SELECT * FROM chat_threads WHERE user_id = ? ORDER BY updated_at DESC').bind(req.userId).all();
+  return json(results);
+});
+
+router.post('/api/chat/threads', withAuth, async (req, env: Env) => {
+  const id = 'th_' + Date.now();
+  await env.DB.prepare('INSERT INTO chat_threads (id, user_id, title) VALUES (?, ?, ?)').bind(id, req.userId, 'New Chat').run();
+  return json({ id });
+});
+
+router.get('/api/chat/threads/:id/messages', withAuth, async (req, env: Env) => {
+  const { results } = await env.DB.prepare('SELECT * FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC').bind(req.params.id).all();
+  return json(results);
+});
+
+router.post('/api/chat/messages', withAuth, withRateLimit, async (req, env: Env) => {
   const { thread_id, content } = await req.json() as any;
   const msgId = 'msg_' + Date.now();
   
   await env.DB.prepare('INSERT INTO chat_messages (id, thread_id, role, content) VALUES (?, ?, ?, ?)').bind(msgId, thread_id, 'user', content).run();
   
-  // Pluggable models check (DEFAULT disabled)
-  let reply = "I'm not sure how to help with that. Use the booking Tool Panel to proceed.";
+  let reply = "I'm not sure how to help with that. Please specify if you need a quote, booking, or KB info.";
   let toolData = null;
+  let usedModel = 'No-AI Deterministic Engine';
 
   const lowerContent = content.toLowerCase();
+
+  // 1. Tool Call Evaluation
   if (lowerContent.includes('quote') || lowerContent.includes('price')) {
     const { results } = await env.DB.prepare('SELECT * FROM pricing_rules WHERE active = 1 ORDER BY priority DESC').all();
     const mockQuoteReq: QuoteRequest = {
@@ -176,37 +217,51 @@ router.post('/api/chat/messages', withAuth, async (req, env: Env) => {
       basePriceDay: 50, deposit: 200, locationId: 'loc_1', vehicleClass: 'compact'
     };
     const quote = calculateQuote(mockQuoteReq, results as unknown as PricingRule[]);
-    reply = "Here is a quote based on your request. Check the Tool Panel.";
+    reply = "I have generated a quote based on your request. Please review the details in the tool panel.";
     toolData = { type: 'quote_card', data: quote };
   } else if (lowerContent.includes('book')) {
-    reply = "You can initiate a booking from the Tool Panel.";
+    reply = "To proceed with the booking, please fill out the form below.";
     toolData = { type: 'booking_card' };
   } else {
-    // FTS search
-    const { results: kbResults } = await env.DB.prepare('SELECT title, snippet(kb_fts, -1, "**", "**", "...", 64) as snippet FROM kb_fts WHERE kb_fts MATCH ? LIMIT 1').bind(content.replace(/[^a-zA-Z0-9 ]/g, ' ')).all();
-    if (kbResults.length > 0) {
-      reply = `According to our KB (${kbResults[0].title}):\n\n${kbResults[0].snippet}`;
+    // 2. Knowledge Base Search & Generative AI Router Fallback
+    const { results: kbResults } = await env.DB.prepare('SELECT title, snippet(kb_fts, -1, "**", "**", "...", 64) as snippet, body_text FROM kb_fts WHERE kb_fts MATCH ? LIMIT 3').bind(content.replace(/[^a-zA-Z0-9 ]/g, ' ')).all();
+    
+    // Build context messages for AI if available
+    const systemPrompt = `You are a helpful car rental copilot agent. Base your answers ONLY on the provided KB context. If unsure, say you don't know.\n\nKB Context:\n` + kbResults.map(r => `[${r.title}]: ${r.body_text}`).join('\n\n');
+    
+    const messagesForAi = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content }
+    ];
+
+    // Attempt AI Response via Router
+    const aiResult = await callModelWithFallback(env, messagesForAi);
+    
+    if (aiResult.content) {
+      reply = aiResult.content;
+      usedModel = aiResult.modelUsed || 'AI Router';
+    } else {
+      // Fallback to No-AI mode using snippet
+      if (kbResults.length > 0) {
+        reply = `*No AI models available. Fallback KB result:*\n\nAccording to **${kbResults[0].title}**:\n${kbResults[0].snippet}`;
+      }
     }
   }
   
   const assistantMsgId = 'msg_' + (Date.now() + 1);
-  await env.DB.prepare('INSERT INTO chat_messages (id, thread_id, role, content) VALUES (?, ?, ?, ?)').bind(assistantMsgId, thread_id, 'assistant', JSON.stringify({ text: reply, tool: toolData })).run();
+  await env.DB.prepare('INSERT INTO chat_messages (id, thread_id, role, content) VALUES (?, ?, ?, ?)').bind(assistantMsgId, thread_id, 'assistant', JSON.stringify({ text: reply, tool: toolData, model: usedModel })).run();
   
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     start(controller) {
-      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: reply, toolData })}\n\n`));
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: reply, toolData, model: usedModel })}\n\n`));
       controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
       controller.close();
     }
   });
   
   return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    }
+    headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' }
   });
 });
 
