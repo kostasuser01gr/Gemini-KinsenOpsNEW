@@ -1,58 +1,36 @@
-# Car Rental Ops Copilot (V8 Ultra)
+# Car Rental Ops Copilot (V11 Ultimate)
 
-## The CLI-Only Enterprise Ops Platform
-This is a production-grade Knowledge Base, SOP Copilot, and Admin platform designed for strict Cloudflare Free Tier constraints (`STRICT_FREE_MODE=true`).
+## Enterprise-Grade CLI-Driven Ops Platform
+Deployed entirely on Cloudflare Pages, Workers, and D1.
 
-### Core Features
-- **Never-Bill-By-Design**: Strictly enforces free-only model providers (Hugging Face Routed Free, Workers AI). 
-- **Auto-Fallback Circuit Breaker**: Gracefully degrades through models; falls back to pure FTS5 No-AI mode upon exhaustion.
-- **Enterprise Controls**: Public Signups + Cloudflare Turnstile, RBAC, Data Retention cron, and correlation-id Audit logs.
-- **PWA & Portability**: Fully offline-capable (threads & KB); JSON Workspace Import/Export.
+### 🔐 High-Security Features
+- **App PIN Lock**: 4-digit device-local unlock using PBKDF2/SHA-256 (no PIN sent to server).
+- **E2EE Password Vault**: End-to-End Encrypted credentials storage. AES-GCM encryption performed client-side with DEK/KEK derivation. Server sees only ciphertext.
+- **Trusted Device Management**: Track and revoke device access remotely.
+- **Never-Bill-By-Design**: Strict compliance guard blocking paid AI configurations.
 
-## 🚀 0 to Prod (CLI-Only Setup)
+### 🚀 Deployment (CLI-Only)
 
-Ensure you have installed: `gh`, `wrangler`, `node`, `curl`, and `make`.
-
-### 1. Authenticate
 ```bash
-gh auth login
-wrangler login
-```
-
-### 2. Scaffold and Connect
-```bash
-# Provision D1, Pages project, and apply migrations
+# 1. Provision Infrastructure
 ./scripts/cloudflare_connect.sh
-```
 
-### 3. Configure Secrets
-Execute these via Wrangler to secure the platform:
-```bash
-echo "your-strong-random-secret" | wrangler secret put SESSION_SECRET --name car-rental-api
-echo "true" | wrangler secret put STRICT_FREE_MODE --name car-rental-api
-echo "admin@yourdomain.com" | wrangler secret put ADMIN_ALLOWLIST_EMAILS --name car-rental-api
+# 2. Set Mandatory Secrets
+wrangler secret put SESSION_SECRET --name car-rental-api
+wrangler secret put TURNSTILE_SECRET_KEY --name car-rental-api
 
-# Optional Turnstile (Bot Protection)
-echo "your-turnstile-secret" | wrangler secret put TURNSTILE_SECRET_KEY --name car-rental-api
-```
-
-### 4. Deploy & Verify
-We use a unified `Makefile` that guarantees a "fail-closed" green build pipeline.
-
-```bash
-# Lints, Typechecks, Audits, Builds, Migrates, Deploys, and Smoke-Tests
+# 3. Full Verification and Deploy
 make full
 ```
 
-### 5. GitHub CI/CD setup
-```bash
-gh secret set CLOUDFLARE_API_TOKEN
-gh secret set CLOUDFLARE_ACCOUNT_ID
-```
-*Any push to `main` will automatically trigger the robust Verification and CD workflows.*
-
-## Diagnostics & Recovery
+### 🛠️ Operator CLI Pack
 - **Check Status**: `./scripts/cloudflare_status.sh`
-- **Auto-Fix Code**: `./scripts/repair.sh`
-- **Diagnose Config**: `./scripts/doctor.sh`
-- **Workspace Backup**: `./scripts/export.sh --token <ADMIN_SESSION> --out backup.json`
+- **Verify Vault API**: `make vault-smoke TOKEN=<TOKEN>`
+- **Export Workspace**: `./scripts/export_workspace.sh <URL> <TOKEN>`
+- **Run Doctor**: `make doctor`
+
+## Architecture Highlights
+- **Backend**: itty-router + D1 + WebCrypto.
+- **Frontend**: React + Tailwind + lucide-react + react-markdown.
+- **Offline**: PWA + IndexedDB cache for threads and KB snippets.
+- **Analytics**: Model KPIs (latency, success rate, fallback frequency).

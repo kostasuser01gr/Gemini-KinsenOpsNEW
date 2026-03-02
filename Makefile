@@ -1,7 +1,7 @@
-# Ops Copilot V9 Makefile
+# Ops Copilot V11 Makefile
 # Complete CLI-Ops Workflow
 
-.PHONY: setup lint fmt typecheck test e2e audit build migrate deploy-worker deploy-pages smoke-local smoke-prod verify full doctor repair clean quota-status backup restore release rollback retry-ops
+.PHONY: setup lint fmt typecheck test e2e audit build migrate deploy-worker deploy-pages smoke-local smoke-prod verify full doctor repair clean quota-status backup restore release rollback retry-ops vault-smoke
 
 setup:
 	@chmod +x scripts/*.sh
@@ -79,7 +79,11 @@ release:
 	@./scripts/release.sh $(VERSION)
 
 rollback:
-	@./scripts/rollback.sh $(VERSION)
+	@./scripts/rollback.sh $(VERSION) $(PAGES_ID)
 
 retry-ops:
 	@./scripts/retry_failed_ops.sh
+
+# V11 Vault Smoke
+vault-smoke:
+	@./scripts/vault_smoke.sh $(TOKEN)

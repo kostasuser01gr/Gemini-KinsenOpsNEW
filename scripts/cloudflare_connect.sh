@@ -7,24 +7,24 @@ PROJECT_NAME="car-rental-copilot"
 DB_NAME="car-rental-db"
 
 echo "=> Ensuring authentication..."
-# If wrangler whoami fails, it will prompt login (interactive)
 npx wrangler whoami || npx wrangler login
 
-echo "=> Setting up D1 Database..."
-# Try to create, if it exists this might fail, so we capture output
-D1_OUT=$(npx wrangler d1 create $DB_NAME 2>&1 || true)
-echo "$D1_OUT"
+echo "=> Checking D1 Database..."
+# We try to create it, if it already exists it will fail but we'll extract the ID from the list if so
+D1_CREATE_OUT=$(npx wrangler d1 create $DB_NAME 2>&1 || true)
+DB_ID=$(echo "$D1_CREATE_OUT" | grep "database_id" | awk -F'"' '{print $4}')
 
-# Extract database_id if created or exists
-DB_ID=$(echo "$D1_OUT" | grep "database_id" | awk -F'"' '{print $4}')
+if [ -z "$DB_ID" ]; then
+    echo "=> Database might already exist, fetching ID..."
+    DB_ID=$(npx wrangler d1 list --format json | jq -r ".[] | select(.name == \"$DB_NAME\") | .uuid")
+fi
 
 if [ -n "$DB_ID" ]; then
-    echo "=> Updating wrangler.toml with new DB ID: $DB_ID"
-    # Basic sed replace for macOS/Linux compatibility
-    sed -i.bak "s/database_id = ".*"/database_id = "$DB_ID"/g" apps/worker/wrangler.toml
-    rm -f apps/worker/wrangler.toml.bak
+    echo "=> Updating wrangler.toml with DB ID: $DB_ID"
+    sed -i '' "s/database_id = \".*\"/database_id = \"$DB_ID\"/g" apps/worker/wrangler.toml
 else
-    echo "=> D1 Database likely already exists. Assuming wrangler.toml is configured."
+    echo "❌ ERROR: Could not find or create D1 database '$DB_NAME'."
+    exit 1
 fi
 
 echo "=> Applying Migrations..."
@@ -32,11 +32,7 @@ cd apps/worker
 npx wrangler d1 migrations apply $DB_NAME --remote
 cd ../..
 
-echo "=> Setting up Pages Project..."
-# Ensure pages project exists (will fail safely if already exists)
-npx wrangler pages project create $PROJECT_NAME --production-branch main || true
+echo "=> Ensuring Pages Project..."
+npx wrangler pages project create $PROJECT_NAME --production-branch main || echo "=> Pages project already exists."
 
-echo "=> Checking Secrets (Interactive inputs skipped for automation, use 'echo val | wrangler secret put KEY')..."
-echo "Ensure you set SESSION_SECRET, TURNSTILE_SECRET_KEY, STRICT_FREE_MODE."
-
-echo "=> Connection provisioned."
+echo "=> Deployment Environment Connected."

@@ -35,7 +35,8 @@ export type Action =
   | 'threads:read' | 'threads:write'
   | 'users:read' | 'users:write'
   | 'admin:export' | 'admin:import'
-  | 'admin:retention';
+  | 'admin:retention'
+  | 'vault:use' | 'vault:admin';
 
 export const PERMISSIONS: Record<Role, Action[]> = {
   admin: [
@@ -46,20 +47,21 @@ export const PERMISSIONS: Record<Role, Action[]> = {
     'threads:read', 'threads:write',
     'users:read', 'users:write',
     'admin:export', 'admin:import',
-    'admin:retention'
+    'admin:retention',
+    'vault:use', 'vault:admin'
   ],
   manager: [
     'kb:read', 'kb:write',
     'models:read',
     'macros:read', 'macros:write',
     'threads:read', 'threads:write',
-    'users:read'
+    'users:read',
+    'vault:use'
   ],
   agent: [
     'kb:read',
     'macros:read',
-    'threads:read', 'threads:write'
+    'threads:read', 'threads:write',
+    'vault:use'
   ]
 };
-
-// Extension for request type to handle workspace context
