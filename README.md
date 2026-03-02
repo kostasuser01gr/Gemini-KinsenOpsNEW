@@ -1,20 +1,26 @@
-# Car Rental Copilot (Master Edition)
+# Car Rental Ops Copilot (Knowledge & SOP Edition)
 
-An internal ChatGPT-like web app for a car rental company, built with enterprise controls.
+An internal ChatGPT-like web app for a car rental company, built for policy search and operational support.
 Hosted entirely on Cloudflare free tier (Pages, Workers, D1).
 
-## Master Upgrades
-- **FREE-Only Model Router**: Intelligently routes inference to Hugging Face Free endpoints with strict verification.
-  - Automatically verifies models use `Apache-2.0` or `MIT` licenses via Hugging Face API.
-  - Denies configuration of `jailbreak`, `nsfw`, or otherwise unrestricted prompt models.
-  - Uses an auto-fallback circuit breaker: if a model hits rate limits or times out (8s), it falls back to the next available.
-  - If all fail, automatically cascades to **No-AI Deterministic Mode** (returns KB citations + exact tool cards).
-- **Productivity UI**:
-  - `Cmd+K` Command Palette for quick navigation and quote generation.
-  - Native Markdown parsing (`react-markdown`) with chat copy buttons.
-  - Inline Agent Macro picker to quickly summon SOP responses.
-- **Security**: Hardened RBAC, comprehensive audit logging (with correlation IDs), optional Cloudflare Access support, and IP/session rate limits.
-- **Tool Cards**: The chat securely renders rich HTML UI cards for "Quotes" and "Bookings" purely from the deterministic engine, avoiding hallucinated answers entirely.
+## Core Upgrades (v3)
+- **NO Pricing/Booking**: Completely removed reservation and pricing logic to focus on Knowledge Base and SOP support.
+- **FREE-Only Model Router**: Intelligently routes inference to verified FREE providers.
+  - **Hugging Face Routed Free**: Auto-verifies `Apache-2.0` or `MIT` licenses.
+  - **Cloudflare Workers AI**: Uses the free daily allocation of 10k neurons.
+  - **Auto-Fallback**: If a model fails or hits limits, the system tries the next one in the chain.
+  - **No-AI Mode**: If all models are unavailable, the system falls back to a deterministic KB snippet + citation mode.
+- **Advanced Knowledge Base**:
+  - Full-text search (FTS5) with role-based visibility.
+  - Citation engine: answers always point to the specific document and snippet used.
+- **Enterprise Controls**:
+  - Hardened RBAC (Admin, Manager, Agent).
+  - Security Audit logs with correlation IDs.
+  - Optional Cloudflare Access (Zero Trust) support.
+- **Agent Productivity**:
+  - `Cmd+K` Command Palette for quick KB search and navigation.
+  - Native Markdown parsing with copy-to-clipboard.
+  - Sidebar folders and thread search.
 
 ## Prerequisites
 - [GitHub CLI](https://cli.github.com/) (`gh`)
@@ -23,114 +29,41 @@ Hosted entirely on Cloudflare free tier (Pages, Workers, D1).
 
 ## Deployment Instructions
 
-Run these exact commands in your terminal to deploy the application from scratch to Cloudflare.
-
 ### 1. Authenticate
-
 ```bash
 gh auth login
 wrangler login
 ```
 
-### 2. Setup Database (Cloudflare D1)
-
-Create the D1 database:
-
+### 2. Database Setup
 ```bash
 wrangler d1 create car-rental-db
-```
-
-*Note the `database_id` output by the command above.*
-
-Update the `apps/worker/wrangler.toml` file with your new `database_id`.
-
-Apply migrations to your local and remote databases:
-
-```bash
-# Apply remotely (production)
-cd apps/worker
+# Copy the database_id to apps/worker/wrangler.toml
 wrangler d1 migrations apply car-rental-db --remote
-
-# Optional: Seed data for testing
-wrangler d1 execute car-rental-db --remote --file=scripts/seed.sql
-cd ../..
 ```
 
-### 3. Deploy Backend (Cloudflare Worker)
-
+### 3. Deploy Worker (Backend)
 ```bash
 cd apps/worker
 npm install
-npm run deploy
-cd ../..
+wrangler deploy
 ```
 
-*Note the deployed Worker URL (e.g., `https://car-rental-api.<your-subdomain>.workers.dev`).*
-
-### 4. Deploy Frontend (Cloudflare Pages)
-
-First, create the Pages project:
-
-```bash
-wrangler pages project create car-rental-copilot --production-branch main
-```
-
-Set the API URL for the frontend. In `apps/web/.env.production` (create it if it doesn't exist):
-
-```env
-VITE_API_URL=https://car-rental-api.<your-subdomain>.workers.dev
-```
-
-Build and deploy the frontend:
-
+### 4. Deploy Pages (Frontend)
 ```bash
 cd apps/web
-npm install
-npm run build
+echo "VITE_API_URL=https://your-worker.workers.dev" > .env.production
+npm install && npm run build
 wrangler pages deploy dist --project-name car-rental-copilot
-cd ../..
 ```
 
-### 5. Set up Secrets
-
-Store secrets securely via Wrangler:
-
+### 5. Configure Secrets
 ```bash
-# Required
 wrangler secret put SESSION_SECRET --name car-rental-api
-
-# Optional: Hugging Face Token (to increase FREE limits)
-wrangler secret put HF_TOKEN --name car-rental-api
-
-# Optional: Cloudflare Access (Zero Trust)
-wrangler secret put ENABLE_CF_ACCESS --name car-rental-api # set to 'true'
-wrangler secret put CF_ACCESS_JWKS_URL --name car-rental-api
-wrangler secret put CF_ACCESS_AUD --name car-rental-api
-wrangler secret put ADMIN_ALLOWLIST_EMAILS --name car-rental-api # e.g. admin@example.com
+wrangler secret put HF_TOKEN --name car-rental-api # (Optional)
 ```
 
-### 6. CI/CD Pipeline (GitHub Actions)
-
-Enable automatic deployments and test runs on push to `main`:
-
-1. Get your Cloudflare API Token (Edit Cloudflare Workers template).
-2. Get your Cloudflare Account ID.
-3. Add them as secrets to your GitHub repository:
-
-```bash
-gh secret set CLOUDFLARE_API_TOKEN
-gh secret set CLOUDFLARE_ACCOUNT_ID
-```
-
-## Testing & Features Demo
-
-Run unit tests locally using vitest:
-
-```bash
-cd apps/worker
-npm run test
-```
-
-- **Try No-AI Mode**: Delete or disable all models in the Admin Model Registry. Type "quote" in the chat interface to see the deterministic tool engine kick in.
-- **Try Command Palette**: Hit `Cmd+K` anywhere in the app to open the quick-action menu.
-- **Try Macros**: In the chat box, click the folder icon to insert SOP templates.
+## Features Demo
+- **No-AI Mode**: Disable all models in the Admin Registry. The chat will still provide answers using KB citations.
+- **Command Palette**: Press `Cmd+K` to jump between KB docs and threads.
+- **License Guard**: Try adding a non-permissive model repo from HF; the system will refuse to enable it.

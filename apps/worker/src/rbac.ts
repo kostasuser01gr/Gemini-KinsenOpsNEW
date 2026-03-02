@@ -3,26 +3,24 @@ import { Role, Action } from './types';
 export const PERMISSIONS: Record<Role, Action[]> = {
   admin: [
     'fleet:read', 'fleet:write',
-    'bookings:read', 'bookings:write',
     'kb:read', 'kb:write',
     'models:read', 'models:write',
     'audit:read',
     'macros:read', 'macros:write',
-    'kpis:read', 'kpis:write'
+    'threads:read', 'threads:write'
   ],
   manager: [
     'fleet:read', 'fleet:write',
-    'bookings:read', 'bookings:write',
     'kb:read', 'kb:write',
     'models:read',
     'macros:read', 'macros:write',
-    'kpis:read'
+    'threads:read', 'threads:write'
   ],
   agent: [
     'fleet:read',
-    'bookings:read', 'bookings:write',
     'kb:read',
-    'macros:read'
+    'macros:read',
+    'threads:read', 'threads:write'
   ]
 };
 
