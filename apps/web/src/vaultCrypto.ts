@@ -10,10 +10,13 @@ export async function deriveKey(passphrase: string, salt: Uint8Array, iterations
     ['deriveKey']
   );
 
+  // Ensure salt is an ArrayBuffer without SharedArrayBuffer issues
+  const saltBuffer = new Uint8Array(salt).buffer;
+
   return crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      salt,
+      salt: saltBuffer,
       iterations,
       hash: 'SHA-256'
     },
@@ -28,7 +31,7 @@ export async function encryptField(key: CryptoKey, plaintext: string): Promise<{
   const encoder = new TextEncoder();
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
+    { name: 'AES-GCM', iv: iv },
     key,
     encoder.encode(plaintext)
   );
@@ -41,8 +44,9 @@ export async function encryptField(key: CryptoKey, plaintext: string): Promise<{
 
 export async function decryptField(key: CryptoKey, ciphertext: string, iv: string): Promise<string> {
   const decoder = new TextDecoder();
+  const ivData = Uint8Array.from(atob(iv), c => c.charCodeAt(0));
   const data = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: Uint8Array.from(atob(iv), c => c.charCodeAt(0)) },
+    { name: 'AES-GCM', iv: ivData },
     key,
     Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
   );
@@ -54,7 +58,7 @@ export async function generateDEK(): Promise<CryptoKey> {
   return crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 256 },
     true,
-    ['encrypt', 'decrypt']
+    ['encrypt', 'decrypt', 'wrapKey', 'unwrapKey']
   );
 }
 

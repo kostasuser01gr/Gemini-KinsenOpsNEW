@@ -1,4 +1,4 @@
-# Ops Copilot Roadmap (v9)
+# Ops Copilot Roadmap (v11)
 
 ## Phase 1 (Completed)
 - ✅ Free-only Model Router
@@ -10,14 +10,18 @@
 - ✅ i18n EL/EN Toggle
 - ✅ Data Retention Manager
 
-## Phase 3 (v9 Operator Pack - Completed)
-- ✅ **Quota Governor**: Limit protection.
-- ✅ **PII Guard**: Automated redaction.
-- ✅ **Canary Rollouts**: Safe model testing.
-- ✅ **Recovery Mode**: Resilient UI.
-- ✅ **Semantic Release**: Tag-driven deployments.
+## Phase 3 (Completed)
+- ✅ Quota Governor & Compliance Ledger
+- ✅ PII Guard (Auto-redaction)
+- ✅ Canary Rollouts
+
+## Phase 4 (v11 Ultimate - Completed)
+- ✅ **App PIN Lock**: Secure device-local unlock.
+- ✅ **E2EE Vault**: End-to-end encrypted password storage.
+- ✅ **Trusted Device Management**: Revocation logic.
+- ✅ **Full CLI Ops**: Provisioning, verify, and deploy via terminal.
 
 ## Future
 - [ ] Collaborative Threads via Durable Objects.
 - [ ] Hybrid Vector Search (Cloudflare Vectorize).
-- [ ] SOP Auto-Generation.
+- [ ] Biometric Unlock (WebAuthn).
