@@ -3,7 +3,12 @@ export type Role = 'admin' | 'manager' | 'agent';
 export interface User {
   id: string;
   email: string;
-  role: Role;
+}
+
+export interface WorkspaceMember {
+  workspace_id: string;
+  user_id: string;
+  role_in_workspace: Role;
 }
 
 export interface Env {
@@ -56,3 +61,14 @@ export const PERMISSIONS: Record<Role, Action[]> = {
     'threads:read', 'threads:write'
   ]
 };
+
+// Extension for request type to handle workspace context
+declare module 'itty-router' {
+  interface IRequest {
+    userId?: string;
+    workspaceId?: string;
+    userRole?: Role;
+    correlationId?: string;
+    waitUntil?: (promise: Promise<any>) => void;
+  }
+}

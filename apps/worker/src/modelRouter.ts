@@ -49,14 +49,14 @@ async function logModelKPI(env: Env, event: any) {
   const today = new Date().toISOString().split('T')[0];
   
   await env.DB.prepare(`
-    INSERT INTO model_call_events (id, thread_id, preferred_model_id, used_model_id, provider_kind, success, latency_ms, error_code, fallbacks_count, strict_free_mode)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(id, event.threadId, event.preferred, event.used, event.provider, event.success ? 1 : 0, event.latency, event.error, event.fallbacks, env.STRICT_FREE_MODE === 'false' ? 0 : 1).run();
+    INSERT INTO model_call_events (id, workspace_id, thread_id, preferred_model_id, used_model_id, provider_kind, success, latency_ms, error_code, fallbacks_count, strict_free_mode)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(id, event.workspaceId, event.threadId, event.preferred, event.used, event.provider, event.success ? 1 : 0, event.latency, event.error, event.fallbacks, env.STRICT_FREE_MODE === 'false' ? 0 : 1).run();
 
   // Incremental rollup
   await env.DB.prepare(`
-    INSERT INTO model_kpis_daily (date, model_id, provider_kind, calls, success_calls, fail_calls, latency_lt1s, latency_lt2s, latency_lt5s, latency_gte5s, fallback_used_calls)
-    VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO model_kpis_daily (date, workspace_id, model_id, provider_kind, calls, success_calls, fail_calls, latency_lt1s, latency_lt2s, latency_lt5s, latency_gte5s, fallback_used_calls)
+    VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(date, model_id) DO UPDATE SET
       calls = calls + 1,
       success_calls = success_calls + excluded.success_calls,
@@ -68,6 +68,7 @@ async function logModelKPI(env: Env, event: any) {
       fallback_used_calls = fallback_used_calls + excluded.fallback_used_calls
   `).bind(
     today, 
+    event.workspaceId,
     event.used, 
     event.provider, 
     event.success ? 1 : 0, 
@@ -78,6 +79,20 @@ async function logModelKPI(env: Env, event: any) {
     event.latency >= 5000 ? 1 : 0,
     event.fallbacks > 0 ? 1 : 0
   ).run();
+}
+
+const rateLimits = new Map<string, { count: number; lastReset: number }>();
+const MAX_REQUESTS_PER_MINUTE = 50;
+
+export function checkRateLimit(userId: string): boolean {
+  const now = Date.now();
+  let limit = rateLimits.get(userId);
+  if (!limit || now - limit.lastReset > 60000) {
+    limit = { count: 0, lastReset: now };
+  }
+  limit.count++;
+  rateLimits.set(userId, limit);
+  return limit.count <= MAX_REQUESTS_PER_MINUTE;
 }
 
 export async function callModel(env: Env, model: Model, messages: any[]): Promise<string> {
@@ -112,10 +127,10 @@ export async function callModel(env: Env, model: Model, messages: any[]): Promis
   throw new Error('Unsupported');
 }
 
-export async function routeChat(env: Env, messages: any[], threadId?: string, preferredModelId?: string): Promise<{ content: string, model_id: string, provider: string, fallbacks: string[] }> {
+export async function routeChat(env: Env, workspaceId: string, messages: any[], threadId?: string, preferredModelId?: string): Promise<{ content: string, model_id: string, provider: string, fallbacks: string[] }> {
   const start = Date.now();
   const nowStr = new Date().toISOString();
-  const candidates = (await env.DB.prepare(`SELECT * FROM models WHERE enabled = 1 ORDER BY priority DESC`).all()).results as unknown as Model[];
+  const candidates = (await env.DB.prepare(`SELECT * FROM models WHERE workspace_id = ? AND enabled = 1 ORDER BY priority DESC`).bind(workspaceId).all()).results as unknown as Model[];
   
   const eligible = candidates.filter(m => {
     if (env.STRICT_FREE_MODE !== 'false' && m.free_policy !== 'FREE_ONLY') return false;
@@ -136,8 +151,7 @@ export async function routeChat(env: Env, messages: any[], threadId?: string, pr
       
       await env.DB.prepare(`UPDATE models SET health_status = 'healthy', last_ok_at = ?, last_error = NULL WHERE id = ?`).bind(nowStr, model.id).run();
       
-      // Async KPI logging
-      ctx?.waitUntil?.(logModelKPI(env, { threadId, preferred: preferredModelId, used: model.id, provider: model.provider_kind, success: true, latency, fallbacks: fallbacks.length }));
+      ctx?.waitUntil?.(logModelKPI(env, { workspaceId, threadId, preferred: preferredModelId, used: model.id, provider: model.provider_kind, success: true, latency, fallbacks: fallbacks.length }));
       
       return { content, model_id: model.model_id, provider: model.provider_kind, fallbacks };
     } catch (e: any) {
@@ -145,13 +159,12 @@ export async function routeChat(env: Env, messages: any[], threadId?: string, pr
       const cooloff = new Date(Date.now() + 10 * 60 * 1000).toISOString();
       await env.DB.prepare(`UPDATE models SET health_status = 'unhealthy', cooloff_until = ?, last_error = ? WHERE id = ?`).bind(cooloff, e.message, model.id).run();
       
-      ctx?.waitUntil?.(logModelKPI(env, { threadId, preferred: preferredModelId, used: model.id, provider: model.provider_kind, success: false, latency: Date.now() - start, error: e.message, fallbacks: fallbacks.length }));
+      ctx?.waitUntil?.(logModelKPI(env, { workspaceId, threadId, preferred: preferredModelId, used: model.id, provider: model.provider_kind, success: false, latency: Date.now() - start, error: e.message, fallbacks: fallbacks.length }));
     }
   }
 
   return { content: '', model_id: 'NONE', provider: 'DISABLED', fallbacks };
 }
 
-// Global context placeholder if needed for waitUntil
 let ctx: ExecutionContext;
 export function setRouterContext(c: ExecutionContext) { ctx = c; }

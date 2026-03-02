@@ -1,6 +1,6 @@
 import { IRequest, Router, error, json, cors } from 'itty-router';
 import { Env, PERMISSIONS } from './types';
-import { withAuth, withCorrelationId, requirePermission } from './middleware';
+import { withAuthAndWorkspace, withCorrelationId, requirePermission } from './middleware';
 import { logAudit } from './audit';
 import { getCached } from './cache';
 import { routeChat, verifyHFLicense, isModelBlocked, setRouterContext } from './modelRouter';
@@ -37,11 +37,12 @@ router.post('/api/auth/signup', async (req, env: Env) => {
   const role = allowlist.includes(email) ? 'admin' : 'agent';
 
   await env.DB.prepare('INSERT INTO users (id, email, password_hash, role) VALUES (?, ?, ?, ?)').bind(id, email, hash, role).run();
+  await env.DB.prepare('INSERT OR IGNORE INTO workspace_members (workspace_id, user_id, role_in_workspace) VALUES (?, ?, ?)').bind('ws_default_public', id, role).run();
   
   const sessId = 'sess_' + Math.random().toString(36).slice(2);
   await env.DB.prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, datetime("now", "+7 days"))').bind(sessId, id).run();
   
-  return json({ token: sessId, role });
+  return json({ token: sessId, role, workspace_id: 'ws_default_public' });
 });
 
 router.post('/api/auth/login', async (req, env: Env) => {
@@ -54,16 +55,16 @@ router.post('/api/auth/login', async (req, env: Env) => {
   const sessId = 'sess_' + Math.random().toString(36).slice(2);
   await env.DB.prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, datetime("now", "+7 days"))').bind(sessId, user.id).run();
   
-  return json({ token: sessId, role: user.role });
+  return json({ token: sessId, role: user.role, workspace_id: 'ws_default_public' });
 });
 
 // --- USER PREFS ---
-router.get('/api/me/preferences', withAuth, async (req, env: Env) => {
+router.get('/api/me/preferences', withAuthAndWorkspace, async (req, env: Env) => {
   const prefs = await env.DB.prepare('SELECT * FROM user_preferences WHERE user_id = ?').bind(req.userId).first();
   return json(prefs || { language: 'en', theme: 'light' });
 });
 
-router.patch('/api/me/preferences', withAuth, async (req, env: Env) => {
+router.patch('/api/me/preferences', withAuthAndWorkspace, async (req, env: Env) => {
   const data = await req.json() as any;
   await env.DB.prepare(`
     INSERT INTO user_preferences (user_id, language, theme, compact_mode, updated_at)
@@ -78,56 +79,55 @@ router.patch('/api/me/preferences', withAuth, async (req, env: Env) => {
 });
 
 // --- KB SEARCH ---
-router.get('/api/kb/search', withAuth, async (req, env: Env) => {
+router.get('/api/kb/search', withAuthAndWorkspace, async (req, env: Env) => {
   const q = req.query.q as string;
   if (!q) return json([]);
   return await getCached(req as any, async () => {
     const { results } = await env.DB.prepare(`
       SELECT title, snippet(kb_fts, -1, '**', '**', '...', 64) as snippet, body_text 
       FROM kb_fts JOIN kb_documents ON kb_documents.rowid = kb_fts.rowid
-      WHERE kb_fts MATCH ? AND visibility_role IN (?, 'agent') LIMIT 10
-    `).bind(q.replace(/[^a-zA-Z0-9 ]/g, ' '), req.userRole).all();
+      WHERE kb_fts MATCH ? AND visibility_role IN (?, 'agent') AND workspace_id = ? LIMIT 10
+    `).bind(q.replace(/[^a-zA-Z0-9 ]/g, ' '), req.userRole, req.workspaceId).all();
     return json(results) as any;
   });
 });
 
 // --- ADMIN: EXPORT / IMPORT ---
-router.get('/api/admin/export', withAuth, requirePermission('admin:export'), async (req, env: Env) => {
+router.get('/api/admin/export', withAuthAndWorkspace, requirePermission('admin:export'), async (req, env: Env) => {
   const [kb, macros, models, users] = await Promise.all([
-    env.DB.prepare('SELECT * FROM kb_documents').all(),
-    env.DB.prepare('SELECT * FROM macros').all(),
-    env.DB.prepare('SELECT id, display_name, provider_kind, model_id, license, enabled, priority FROM models').all(),
-    env.DB.prepare('SELECT email, role, created_at FROM users').all(),
+    env.DB.prepare('SELECT * FROM kb_documents WHERE workspace_id = ?').bind(req.workspaceId).all(),
+    env.DB.prepare('SELECT * FROM macros WHERE workspace_id = ?').bind(req.workspaceId).all(),
+    env.DB.prepare('SELECT id, display_name, provider_kind, model_id, license, enabled, priority FROM models WHERE workspace_id = ?').bind(req.workspaceId).all(),
+    env.DB.prepare('SELECT users.email, workspace_members.role_in_workspace as role, users.created_at FROM users JOIN workspace_members ON users.id = workspace_members.user_id WHERE workspace_members.workspace_id = ?').bind(req.workspaceId).all(),
   ]);
   return json({ kb: kb.results, macros: macros.results, models: models.results, users: users.results, exported_at: new Date().toISOString() });
 });
 
-router.post('/api/admin/import', withAuth, requirePermission('admin:import'), async (req, env: Env) => {
+router.post('/api/admin/import', withAuthAndWorkspace, requirePermission('admin:import'), async (req, env: Env) => {
   const bundle = await req.json() as any;
-  // Simplified merging logic
   if (bundle.kb) {
     for (const doc of bundle.kb) {
-      await env.DB.prepare('INSERT OR REPLACE INTO kb_documents (id, title, body_text, visibility_role) VALUES (?, ?, ?, ?)').bind(doc.id, doc.title, doc.body_text, doc.visibility_role).run();
+      await env.DB.prepare('INSERT OR REPLACE INTO kb_documents (id, workspace_id, title, body_text, visibility_role) VALUES (?, ?, ?, ?, ?)').bind(doc.id, req.workspaceId, doc.title, doc.body_text, doc.visibility_role).run();
     }
   }
   return json({ success: true });
 });
 
 // --- ADMIN: RETENTION ---
-router.post('/api/admin/retention/run', withAuth, requirePermission('admin:retention'), async (req, env: Env) => {
+router.post('/api/admin/retention/run', withAuthAndWorkspace, requirePermission('admin:retention'), async (req, env: Env) => {
   const res = await RetentionManager.run(env);
-  await logAudit(env, req.userId, 'run_retention', 'system', null, res, req.correlationId);
+  await logAudit(env, req.userId!, 'run_retention', 'system', null, res, req.correlationId!, req.workspaceId);
   return json(res);
 });
 
 // --- ADMIN: MODEL KPIs ---
-router.get('/api/admin/models/kpis', withAuth, requirePermission('models:read'), async (req, env: Env) => {
-  const { results } = await env.DB.prepare('SELECT * FROM model_kpis_daily ORDER BY date DESC LIMIT 30').all();
+router.get('/api/admin/models/kpis', withAuthAndWorkspace, requirePermission('models:read'), async (req, env: Env) => {
+  const { results } = await env.DB.prepare('SELECT * FROM model_kpis_daily WHERE workspace_id = ? ORDER BY date DESC LIMIT 30').bind(req.workspaceId).all();
   return json(results);
 });
 
 // --- CHAT ---
-router.post('/api/chat/messages', withAuth, async (req, env: Env, ctx: ExecutionContext) => {
+router.post('/api/chat/messages', withAuthAndWorkspace, async (req, env: Env, ctx: ExecutionContext) => {
   const { thread_id, content } = await req.json() as any;
   setRouterContext(ctx);
   
@@ -136,11 +136,11 @@ router.post('/api/chat/messages', withAuth, async (req, env: Env, ctx: Execution
   
   const kbRaw = await env.DB.prepare(`
     SELECT title, body_text FROM kb_fts JOIN kb_documents ON kb_documents.rowid = kb_fts.rowid
-    WHERE kb_fts MATCH ? AND visibility_role IN (?, 'agent') LIMIT 3
-  `).bind(content.replace(/[^a-zA-Z0-9 ]/g, ' '), req.userRole).all();
+    WHERE kb_fts MATCH ? AND visibility_role IN (?, 'agent') AND workspace_id = ? LIMIT 3
+  `).bind(content.replace(/[^a-zA-Z0-9 ]/g, ' '), req.userRole, req.workspaceId).all();
   const kbContext = kbRaw.results as any[];
 
-  const aiRes = await routeChat(env, [{ role: 'system', content: `Context:\n` + kbContext.map(d => `[${d.title}]: ${d.body_text}`).join('\n\n') }, { role: 'user', content }], thread_id);
+  const aiRes = await routeChat(env, req.workspaceId!, [{ role: 'system', content: `Context:\n` + kbContext.map(d => `[${d.title}]: ${d.body_text}`).join('\n\n') }, { role: 'user', content }], thread_id);
   
   let reply = aiRes.content;
   if (!reply) reply = kbContext.length > 0 ? `Policies:\n\n` + kbContext.map(d => `**${d.title}**: ${d.body_text.slice(0, 200)}...`).join('\n\n') : "No info.";
