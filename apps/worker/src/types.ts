@@ -17,6 +17,9 @@ export interface Env {
   HF_TOKEN?: string;
   TURNSTILE_SECRET_KEY?: string;
   REQUIRE_INVITE_CODE?: string;
+  STRICT_FREE_MODE?: string; // "true" | "false"
+  THREAD_ARCHIVE_DAYS?: string;
+  AUDIT_ARCHIVE_DAYS?: string;
 }
 
 export type Action = 
@@ -25,7 +28,9 @@ export type Action =
   | 'audit:read'
   | 'macros:read' | 'macros:write'
   | 'threads:read' | 'threads:write'
-  | 'users:read' | 'users:write';
+  | 'users:read' | 'users:write'
+  | 'admin:export' | 'admin:import'
+  | 'admin:retention';
 
 export const PERMISSIONS: Record<Role, Action[]> = {
   admin: [
@@ -34,7 +39,9 @@ export const PERMISSIONS: Record<Role, Action[]> = {
     'audit:read',
     'macros:read', 'macros:write',
     'threads:read', 'threads:write',
-    'users:read', 'users:write'
+    'users:read', 'users:write',
+    'admin:export', 'admin:import',
+    'admin:retention'
   ],
   manager: [
     'kb:read', 'kb:write',

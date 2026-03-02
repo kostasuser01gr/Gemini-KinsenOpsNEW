@@ -1,0 +1,24 @@
+{
+  "common": {
+    "login": "Login",
+    "signup": "Sign Up",
+    "logout": "Logout",
+    "settings": "Settings",
+    "admin": "Admin",
+    "send": "Send",
+    "new_chat": "New Chat",
+    "search": "Search",
+    "save": "Save"
+  },
+  "chat": {
+    "welcome": "How can I help you today?",
+    "offline": "Offline Mode",
+    "placeholder": "Ask about policies or operations..."
+  },
+  "admin": {
+    "kpis": "Model Performance",
+    "retention": "Data Retention",
+    "export": "Export Data",
+    "import": "Import Data"
+  }
+}

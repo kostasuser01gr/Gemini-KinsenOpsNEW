@@ -44,21 +44,48 @@ async function logCFUsage(env: Env, neurons: number) {
   `).bind(today, neurons, neurons).run();
 }
 
-const rateLimits = new Map<string, { count: number; lastReset: number }>();
-const MAX_REQUESTS_PER_MINUTE = 50;
+async function logModelKPI(env: Env, event: any) {
+  const id = 'evt_' + Date.now() + Math.random().toString(36).slice(2, 5);
+  const today = new Date().toISOString().split('T')[0];
+  
+  await env.DB.prepare(`
+    INSERT INTO model_call_events (id, thread_id, preferred_model_id, used_model_id, provider_kind, success, latency_ms, error_code, fallbacks_count, strict_free_mode)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(id, event.threadId, event.preferred, event.used, event.provider, event.success ? 1 : 0, event.latency, event.error, event.fallbacks, env.STRICT_FREE_MODE === 'false' ? 0 : 1).run();
 
-export function checkRateLimit(userId: string): boolean {
-  const now = Date.now();
-  let limit = rateLimits.get(userId);
-  if (!limit || now - limit.lastReset > 60000) {
-    limit = { count: 0, lastReset: now };
-  }
-  limit.count++;
-  rateLimits.set(userId, limit);
-  return limit.count <= MAX_REQUESTS_PER_MINUTE;
+  // Incremental rollup
+  await env.DB.prepare(`
+    INSERT INTO model_kpis_daily (date, model_id, provider_kind, calls, success_calls, fail_calls, latency_lt1s, latency_lt2s, latency_lt5s, latency_gte5s, fallback_used_calls)
+    VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(date, model_id) DO UPDATE SET
+      calls = calls + 1,
+      success_calls = success_calls + excluded.success_calls,
+      fail_calls = fail_calls + excluded.fail_calls,
+      latency_lt1s = latency_lt1s + excluded.latency_lt1s,
+      latency_lt2s = latency_lt2s + excluded.latency_lt2s,
+      latency_lt5s = latency_lt5s + excluded.latency_lt5s,
+      latency_gte5s = latency_gte5s + excluded.latency_gte5s,
+      fallback_used_calls = fallback_used_calls + excluded.fallback_used_calls
+  `).bind(
+    today, 
+    event.used, 
+    event.provider, 
+    event.success ? 1 : 0, 
+    event.success ? 0 : 1,
+    event.latency < 1000 ? 1 : 0,
+    (event.latency >= 1000 && event.latency < 2000) ? 1 : 0,
+    (event.latency >= 2000 && event.latency < 5000) ? 1 : 0,
+    event.latency >= 5000 ? 1 : 0,
+    event.fallbacks > 0 ? 1 : 0
+  ).run();
 }
 
 export async function callModel(env: Env, model: Model, messages: any[]): Promise<string> {
+  // STRICT FREE MODE Check
+  if (env.STRICT_FREE_MODE !== 'false' && model.free_policy !== 'FREE_ONLY') {
+    throw new Error('STRICT_FREE_MODE violation: Model is not flagged as FREE_ONLY');
+  }
+
   if (model.provider_kind === 'HF_ROUTED_FREE') {
     const res = await fetch(`https://api-inference.huggingface.co/models/${model.model_id}/v1/chat/completions`, {
       method: 'POST',
@@ -77,9 +104,7 @@ export async function callModel(env: Env, model: Model, messages: any[]): Promis
   if (model.provider_kind === 'CF_WORKERS_AI_FREE') {
     if (!env.AI) throw new Error('AI not bound');
     if (!(await checkCFUsage(env))) throw new Error('CF Neuron limit reached');
-    
     const res = await env.AI.run(model.model_id, { messages, max_tokens: 800 });
-    // Approximate neuron usage (simple count for free tier safety)
     await logCFUsage(env, 100); 
     return res.response || res.choices?.[0]?.message?.content;
   }
@@ -87,28 +112,46 @@ export async function callModel(env: Env, model: Model, messages: any[]): Promis
   throw new Error('Unsupported');
 }
 
-export async function routeChat(env: Env, messages: any[], preferredModelId?: string): Promise<{ content: string, model_id: string, provider: string, fallbacks: string[] }> {
-  const now = new Date().toISOString();
-  const candidates = (await env.DB.prepare(`SELECT * FROM models WHERE enabled = 1 AND free_policy = 'FREE_ONLY' ORDER BY priority DESC`).all()).results as unknown as Model[];
+export async function routeChat(env: Env, messages: any[], threadId?: string, preferredModelId?: string): Promise<{ content: string, model_id: string, provider: string, fallbacks: string[] }> {
+  const start = Date.now();
+  const nowStr = new Date().toISOString();
+  const candidates = (await env.DB.prepare(`SELECT * FROM models WHERE enabled = 1 ORDER BY priority DESC`).all()).results as unknown as Model[];
   
-  const healthy = candidates.filter(m => !m.cooloff_until || m.cooloff_until < now);
+  const eligible = candidates.filter(m => {
+    if (env.STRICT_FREE_MODE !== 'false' && m.free_policy !== 'FREE_ONLY') return false;
+    if (m.cooloff_until && m.cooloff_until > nowStr) return false;
+    return true;
+  });
+
   if (preferredModelId) {
-    const idx = healthy.findIndex(m => m.id === preferredModelId);
-    if (idx > -1) { const [p] = healthy.splice(idx, 1); healthy.unshift(p); }
+    const idx = eligible.findIndex(m => m.id === preferredModelId);
+    if (idx > -1) { const [p] = eligible.splice(idx, 1); eligible.unshift(p); }
   }
 
   const fallbacks: string[] = [];
-  for (const model of healthy) {
+  for (const model of eligible) {
     try {
       const content = await callModel(env, model, messages);
-      await env.DB.prepare(`UPDATE models SET health_status = 'healthy', last_ok_at = ?, last_error = NULL WHERE id = ?`).bind(now, model.id).run();
+      const latency = Date.now() - start;
+      
+      await env.DB.prepare(`UPDATE models SET health_status = 'healthy', last_ok_at = ?, last_error = NULL WHERE id = ?`).bind(nowStr, model.id).run();
+      
+      // Async KPI logging
+      ctx?.waitUntil?.(logModelKPI(env, { threadId, preferred: preferredModelId, used: model.id, provider: model.provider_kind, success: true, latency, fallbacks: fallbacks.length }));
+      
       return { content, model_id: model.model_id, provider: model.provider_kind, fallbacks };
     } catch (e: any) {
       fallbacks.push(model.model_id);
       const cooloff = new Date(Date.now() + 10 * 60 * 1000).toISOString();
       await env.DB.prepare(`UPDATE models SET health_status = 'unhealthy', cooloff_until = ?, last_error = ? WHERE id = ?`).bind(cooloff, e.message, model.id).run();
+      
+      ctx?.waitUntil?.(logModelKPI(env, { threadId, preferred: preferredModelId, used: model.id, provider: model.provider_kind, success: false, latency: Date.now() - start, error: e.message, fallbacks: fallbacks.length }));
     }
   }
 
   return { content: '', model_id: 'NONE', provider: 'DISABLED', fallbacks };
 }
+
+// Global context placeholder if needed for waitUntil
+let ctx: ExecutionContext;
+export function setRouterContext(c: ExecutionContext) { ctx = c; }
